@@ -210,7 +210,7 @@ Notes:
 
 ### PDF vs other backends (local comparison)
 
-`cmd/pdfcompare` is a **separate Go module** (with its own `go.mod`) so the **libwkhtmltox** dependency (CGO, via `github.com/adrg/go-wkhtmltopdf`) does not enter the main module's import graph.
+`cmd/pdfcompare` is a **separate Go module** (with its own `go.mod`) so this optional CLI harness stays out of the main module’s dependency graph.
 
 From the **repository root**:
 
@@ -224,38 +224,73 @@ Or:
 cd cmd/pdfcompare && go run .
 ```
 
-Common flags: `-runs 15 -warmup 3 -html /path/to/file.html`.
+Common flags: `-runs 15 -warmup 3 -html /path/to/file.html`. Add `-nomem` to skip the extra allocation batch (no second line).
 
-**libwkhtmltox (not the `wkhtmltopdf` binary):** calls go through Go import + CGO. You need `wkhtmltox` *headers* and *library* that match the CPU architecture (for example arm64 vs amd64). Example:
+For each backend the tool prints **two lines**: wall-clock **median / mean / p95**, then **`ns/op`** (mean wall time in nanoseconds), **`B/op`** and **`allocs/op`** from `runtime.MemStats` (`TotalAlloc` / `Mallocs` delta, divided by `runs`) over a second batch of iterations. Those values are **Go heap only**; memory inside Chromium or WebKit processes is not counted, so they are comparable in spirit to `go test -benchmem` for the Go side only, not identical to it.
+
+**`wkhtmltopdf`:** `pdfcompare` runs the **`wkhtmltopdf` subprocess** when the binary is on `PATH` (or set **`WKHTMLTOPDF_PATH`**). That compares against the WebKit/Qt-style stack shipped with typical wkhtml installers.
+
+#### Sample PDF results (captured run)
+
+Captured **2026-04-16** on `darwin` / `arm64` / Apple M2, `go1.23.4`. Command from repository root:
 
 ```bash
-cd cmd/pdfcompare
-CGO_ENABLED=1 go run -tags libwkhtmltox .
+go run -C cmd/pdfcompare . -runs 3 -warmup 1
 ```
 
-Without that build tag, the libwkhtmltox path is skipped with a message; Chromium and Chrome CLI paths are still benchmarked. The `engine/pdf.RenderChromeDP` function remains available to benchmark chromedp alone (without gofpdf fallback).
+Bundled HTML fixture (~80-row table). **Rerun on your machine**; wall times shift with cache and load. **`wkhtmltopdf`** was on `PATH` as `/usr/local/bin/wkhtmltopdf`.
 
-#### Sample PDF results (median wall-clock, one machine)
+| Backend | median | mean | p95 | ns/op | B/op | allocs/op |
+| --- | --- | --- | --- | ---: | ---: | ---: |
+| chromedp (`RenderChromeDP`) | 776ms | 776ms | 796ms | 775702638 | 1916728 | 2341 |
+| go-docgen `PDFRenderAuto` | 766ms | 761ms | 768ms | 760544444 | 1955781 | 2401 |
+| go-docgen `PDFRenderChromium` | 798ms | 793ms | 820ms | 793411819 | 1953800 | 2407 |
+| go-docgen `PDFRenderLight` | 1ms | 1ms | 1ms | 848375 | 4983501 | 974 |
+| Chrome CLI `--print-to-pdf` | 2.055s | 2.111s | 2.237s | 2111353583 | 16882 | 55 |
+| `wkhtmltopdf` CLI (subprocess) | 403ms | 407ms | 419ms | 407107486 | 21245 | 109 |
+| gofpdf `MultiCell` only | 1ms | 1ms | 1ms | 983749 | 4952437 | 930 |
 
-Same environment as the CSV/Excel table below (`darwin` / `arm64` / Apple M2). Command: `go run -C cmd/pdfcompare . -runs 1 -warmup 0` on the bundled fixture (~80-row HTML table). **This is illustrative only; rerun on your machine.**
+`ns/op` is mean wall time per iteration (nanoseconds). `B/op` and `allocs/op` are Go `runtime.MemStats` averages over a second batch (see tool banner text). Generator rows include template + `docgen.New` each iteration in this harness, so `B/op` can exceed the bare `gofpdf` row even when wall time is tiny for Light mode.
 
-| Backend | Median (sample) | Brief notes |
-| --- | ---: | --- |
-| chromedp (`RenderChromeDP`) | ~1.6 s | CDP + `PrintToPDF`, Chromium process |
-| go-docgen `Generator.PDF` (`PDFRenderAuto`) | ~0.9–1.6 s | HTML template + chromedp, same as default `New()` |
-| go-docgen `PDFRenderLight` | ~2 ms (order of gofpdf row) | No Chromium; not real HTML rendering |
-| Chrome CLI `--print-to-pdf` | ~2.0 s | Spawns a new Chrome process per iteration |
-| libwkhtmltox (`adrg/go-wkhtmltopdf`) | ~0.4–0.5 s | WebKit/Qt in-process, no subprocess |
-| gofpdf `MultiCell` (text fallback) | ~2 ms | Not HTML layout; baseline only |
+<details>
+<summary>Raw `pdfcompare` output (same run)</summary>
 
-#### Why libwkhtmltox / wkhtml is often faster than Chromium in this benchmark
+```
+PDF compare — same HTML input, wall time + Go runtime allocation shape
+runs=3 warmup=1 nomem=false go=go1.23.4 os=darwin/arm64
+Line 1: median/mean/p95 wall time per iteration.
+Line 2: ns/op = mean wall nanoseconds; B/op & allocs/op = (TotalAlloc, Mallocs delta) / runs over a fresh batch (Go heap only — not Chrome/wkhtml native heaps).
+For library micro-benchmarks (CSV/Excel) see README "Latest benchmark result".
+If chromedp SKIP but go-docgen Auto is very fast, Auto used gofpdf fallback, not Chromium.
 
-- **Smaller stack:** `wkhtmltox` uses an embedded WebKit/Qt render engine in one process; you do not need to run a full-featured Chrome browser.
-- **Less protocol overhead:** chromedp talks to Chromium over DevTools (WebSocket/CDP), navigates a `data:` URL, then `PrintToPDF` — more steps and synchronization than libwkhtmltox's native conversion path.
-- **Chrome CLI** typically spawns a new process and user data directory per invocation, similar to cold-start cost; that often loses to a single library converting HTML straight into a PDF buffer.
-- **gofpdf** almost always "wins" on the numbers because it is **not** an HTML renderer: it writes raw text to the PDF instead of parsing DOM/CSS.
+chromedp only (engine/pdf.RenderChromeDP, no fallback)      median=     776ms  mean=     776ms  p95=     796ms
+                                                            ns/op=775702638  B/op=1916728  allocs/op=2341
+go-docgen Generator.PDF (PDFRenderAuto)                     median=     766ms  mean=     761ms  p95=     768ms
+                                                            ns/op=760544444  B/op=1955781  allocs/op=2401
+go-docgen Generator.PDF (PDFRenderChromium)                 median=     798ms  mean=     793ms  p95=     820ms
+                                                            ns/op=793411819  B/op=1953800  allocs/op=2407
+go-docgen Generator.PDF (PDFRenderLight)                    median=       1ms  mean=       1ms  p95=       1ms
+                                                            ns/op=848375  B/op=4983501  allocs/op=974
+Chrome/Chromium CLI (--headless --print-to-pdf)             median=    2.055s  mean=    2.111s  p95=    2.237s
+                                                            ns/op=2111353583  B/op=16882  allocs/op=55
+wkhtmltopdf CLI (subprocess)                                median=     403ms  mean=     407ms  p95=     419ms
+                                                            ns/op=407107486  B/op=21245  allocs/op=109
+gofpdf MultiCell (same idea as engine/pdf light fallback)   median=       1ms  mean=       1ms  p95=       1ms
+                                                            ns/op=983749  B/op=4952437  allocs/op=930
+```
 
-Warning: wkhtmltopdf / libwkhtmltox is **no longer maintained** upstream; Chromium is more modern for CSS and web features. The numbers above help explain **performance cost**, not a single-product recommendation.
+</details>
+
+#### Why wkhtmltopdf is often faster than Chromium in this benchmark
+
+On the captured run, **`wkhtmltopdf` (~407 ms mean)** sits between **chromedp (~776 ms)** and **Chrome `--print-to-pdf` (~2.11 s)** for the same fixture.
+
+- **Smaller stack:** wkhtml’s WebKit/Qt path is lighter than a full Chrome feature set used with CDP `PrintToPDF`.
+- **Less protocol overhead:** chromedp talks to Chromium over DevTools (WebSocket/CDP), navigates a `data:` URL, then `PrintToPDF` — more steps and synchronization than spawning `wkhtmltopdf` with a `file://` input.
+- **Chrome CLI** typically spawns a new process and user data directory per invocation, similar to cold-start cost.
+- **gofpdf** almost always "wins" on wall time because it is **not** an HTML renderer: it writes raw text to the PDF instead of parsing DOM/CSS.
+
+Warning: wkhtmltopdf is **no longer maintained** upstream; Chromium is more modern for CSS and web features. The numbers above help explain **performance cost**, not a single-product recommendation.
 
 ### Performance optimizations (in code)
 

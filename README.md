@@ -172,7 +172,7 @@ if err != nil {
 | `PDFRenderChromium` | Chromium only; errors propagate | Same as Auto when Chromium succeeds | Full HTML/CSS |
 | `PDFRenderLight` | `gofpdf` `MultiCell` only; no browser | Sub-millisecond to low milliseconds for small HTML strings | **Not** HTML layout—tags show as text; use only when that is acceptable |
 
-For **apples-to-apples** wall times against wkhtmltopdf, Chrome CLI, and the light path, use `cmd/pdfcompare` (see below). Repository benchmarks still omit PDF because numbers vary with OS, GPU, and whether Chromium is already warm.
+For **apples-to-apples** wall times against wkhtmltopdf, Chrome CLI, and the light path, use `cmd/pdfcompare` (see below). **`Generator` micro-benchmarks** (CSV, Excel, PDF light, PDF Chromium) live in `export_benchmark_test.go` at the module root; lower-level PDF benches live in `engine/pdf`. Chromedp-backed benchmarks are opt-in (skipped under `go test -short`) because they are slow and machine-dependent.
 
 ## Error Handling Notes
 
@@ -190,23 +190,38 @@ go test ./...
 
 ## Benchmark
 
-Benchmark tests are included for CSV and Excel export flows.
+Benchmark tests cover:
 
-Run all benchmarks:
+- **Root package** (`export_benchmark_test.go`): `BenchmarkGenerator_CSV`, `BenchmarkGenerator_Excel`, `BenchmarkGenerator_PDF` ( **`PDFRenderLight`** ), and `BenchmarkGenerator_PDF_Chromium` ( **`PDFRenderChromium`** ; **skipped under `-short`** ).
+- **`engine/pdf`**: `BenchmarkRender_Light`, `BenchmarkRender_Light_Small`, plus chromedp benches **skipped under `-short`** (`BenchmarkRender_Chromium`, `BenchmarkRenderChromeDP`).
+
+Run all benchmarks (recommended; skips slow Chromium PDF benches):
+
+```bash
+go test -short -run='^$' -bench . -benchmem ./...
+```
+
+Run all benchmarks including every chromedp PDF benchmark (slow; needs Chromium):
 
 ```bash
 go test -run='^$' -bench . -benchmem ./...
 ```
 
-Run generator-specific benchmarks only:
+Run generator-specific benchmarks only (includes PDF light; skips PDF Chromium while `-short` is set):
 
 ```bash
-go test -run='^$' -bench BenchmarkGenerator -benchmem .
+go test -short -run='^$' -bench BenchmarkGenerator -benchmem .
+```
+
+Measure **`Generator.PDF` + Chromium only** (same HTML/data as `BenchmarkGenerator_PDF`; not compatible with `-short`):
+
+```bash
+go test -run='^$' -bench=BenchmarkGenerator_PDF_Chromium -benchmem .
 ```
 
 Notes:
 
-- PDF **unit** benchmarks are not included in `go test -bench` for this module: chromedp/Chromium startup dominates and results differ widely by machine and cache state. Use `cmd/pdfcompare` for reproducible local comparisons between backends.
+- For **wall-clock** PDF comparisons (chromedp, Chrome CLI, wkhtmltopdf, gofpdf), use `cmd/pdfcompare` (see below).
 
 ### PDF vs other backends (local comparison)
 
@@ -260,7 +275,7 @@ PDF compare — same HTML input, wall time + Go runtime allocation shape
 runs=3 warmup=1 nomem=false go=go1.23.4 os=darwin/arm64
 Line 1: median/mean/p95 wall time per iteration.
 Line 2: ns/op = mean wall nanoseconds; B/op & allocs/op = (TotalAlloc, Mallocs delta) / runs over a fresh batch (Go heap only — not Chrome/wkhtml native heaps).
-For library micro-benchmarks (CSV/Excel) see README "Latest benchmark result".
+For library micro-benchmarks (CSV/Excel/PDF generator + engine/pdf) see README "Latest benchmark result".
 If chromedp SKIP but go-docgen Auto is very fast, Auto used gofpdf fallback, not Chromium.
 
 chromedp only (engine/pdf.RenderChromeDP, no fallback)      median=     776ms  mean=     776ms  p95=     796ms
@@ -286,7 +301,7 @@ gofpdf MultiCell (same idea as engine/pdf light fallback)   median=       1ms  m
 On the captured run, **`wkhtmltopdf` (~407 ms mean)** sits between **chromedp (~776 ms)** and **Chrome `--print-to-pdf` (~2.11 s)** for the same fixture.
 
 - **Smaller stack:** wkhtml’s WebKit/Qt path is lighter than a full Chrome feature set used with CDP `PrintToPDF`.
-- **Less protocol overhead:** chromedp talks to Chromium over DevTools (WebSocket/CDP), navigates a `data:` URL, then `PrintToPDF` — more steps and synchronization than spawning `wkhtmltopdf` with a `file://` input.
+- **Less protocol overhead:** chromedp talks to Chromium over DevTools (WebSocket/CDP), then `PrintToPDF` — more steps and synchronization than spawning `wkhtmltopdf` with a `file://` input.
 - **Chrome CLI** typically spawns a new process and user data directory per invocation, similar to cold-start cost.
 - **gofpdf** almost always "wins" on wall time because it is **not** an HTML renderer: it writes raw text to the PDF instead of parsing DOM/CSS.
 
@@ -295,33 +310,53 @@ Warning: wkhtmltopdf is **no longer maintained** upstream; Chromium is more mode
 ### Performance optimizations (in code)
 
 - **HTML / text templates** (`template` package): parsed templates are cached by source string and cloned per render, which speeds up repeated PDF HTML rendering when the template string is reused. Choosing `PDFRenderLight` avoids Chromium entirely when plain-text PDF output is enough.
+- **Chromium PDF** (`engine/pdf`): HTML is applied with `Page.setDocumentContent` on `about:blank` instead of navigating a `data:` URL built with `url.PathEscape`, avoiding an extra full-size copy of the HTML string on the Go heap each render (Chromium’s own RSS is unchanged).
 - **CSV / Excel row helpers** (`engine/csv`, `engine/excel`): cell values use `internal/strfmt.FormatAny` with fast paths for common scalar types instead of always using `fmt.Sprintf`, which reduces allocations in hot loops.
 - **Excel writer** (`engine/excel`): rows are written with `SetSheetRow` instead of one `SetCellValue` per cell (fewer high-level calls for the same data).
 - **CSV / Excel `text/template` parse**: `text/template` requires `Funcs` to be registered **before** `Parse`, and row/sheet helpers close over per-run state, so we **cannot** safely reuse a single parsed template the same way as HTML. Further gains there would need a different API (for example accepting a pre-parsed template or a row sink on `data`).
 
-### Latest benchmark result (sample, after optimizations)
+### Latest benchmark result (sample)
 
-Environment:
+Environment (single run, **2026-04-16**):
 
 - `goos`: `darwin`
 - `goarch`: `arm64`
 - `cpu`: `Apple M2`
 
-Command:
+Command (use **`-short`** so slow chromedp PDF benchmarks are skipped; they still exist for manual runs):
 
 ```bash
-go test -run='^$' -bench . -benchmem ./...
+go test -short -run='^$' -bench . -benchmem ./...
 ```
 
 Result summary:
 
 | Benchmark | ns/op | B/op | allocs/op |
 | --- | ---: | ---: | ---: |
-| `BenchmarkGenerator_CSV` | 79312 | 44013 | 1197 |
-| `BenchmarkGenerator_Excel` | 1407766 | 804018 | 8081 |
-| `engine/csv.BenchmarkBuild` | 6552 | 5659 | 91 |
-| `engine/csv.BenchmarkGenerate` | 3108 | 5040 | 3 |
-| `engine/excel.BenchmarkBuild` | 7266 | 6236 | 106 |
-| `engine/excel.BenchmarkGenerate` | 1337422 | 743901 | 6891 |
+| `BenchmarkGenerator_PDF` (`PDFRenderLight`) | 508298 | 2560702 | 2508 |
+| `BenchmarkGenerator_CSV` | 78645 | 44015 | 1197 |
+| `BenchmarkGenerator_Excel` | 1406753 | 807028 | 8081 |
+| `engine/csv.BenchmarkBuild` | 6716 | 5659 | 91 |
+| `engine/csv.BenchmarkGenerate` | 3205 | 5040 | 3 |
+| `engine/excel.BenchmarkBuild` | 7467 | 6235 | 106 |
+| `engine/excel.BenchmarkGenerate` | 1593084 | 750906 | 6891 |
+| `engine/pdf.BenchmarkRender_Light` | 466855 | 3731207 | 712 |
+| `engine/pdf.BenchmarkRender_Light_Small` | 137595 | 1233915 | 196 |
+
+`BenchmarkGenerator_PDF_Chromium` and the chromedp benches in `engine/pdf` are skipped when `-short` is set. Sample for **`BenchmarkGenerator_PDF_Chromium`** on the same machine (two iterations; wall time dominates):
+
+| Benchmark | ns/op | B/op | allocs/op |
+| --- | ---: | ---: | ---: |
+| `BenchmarkGenerator_PDF_Chromium` | 713155771 | 988136 | 4436 |
+
+```bash
+go test -run='^$' -bench=BenchmarkGenerator_PDF_Chromium -benchtime=2x -benchmem .
+```
+
+To measure raw `engine/pdf` chromedp benches locally (slow, needs Chromium):
+
+```bash
+go test -run='^$' -bench 'BenchmarkRender_Chromium|BenchmarkRenderChromeDP' -benchtime=3x -benchmem ./engine/pdf/
+```
 
 These numbers are machine-dependent. Use them as a baseline and compare against your own environment when optimizing.

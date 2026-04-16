@@ -18,7 +18,7 @@ go get github.com/viantonugroho11/go-docgen
 
 - Unified API for `PDF`, `CSV`, and `Excel`
 - Works with in-memory templates and file-based templates
-- Small public surface area (`docgen.New`, `Generator` methods: `PDF`, `CSV`, `Excel`, and `*FromFile` variants)
+- Small public surface area (`docgen.New`, `Generator` methods: `PDF`, `CSV`, `Excel`, and `*FromFile` variants); PDF backend is selectable at construction time (`WithPDFRenderMode`)
 - Extensible internals split by engine (`engine/csv`, `engine/excel`, `engine/pdf`)
 
 ## Core API
@@ -37,6 +37,21 @@ Optional config:
 
 ```go
 gen := docgen.New(docgen.WithTimeout(5 * time.Second))
+```
+
+Fix the PDF pipeline (default is Chromium then lightweight fallback):
+
+```go
+import (
+	"time"
+
+	"github.com/viantonugroho11/go-docgen"
+)
+
+gen := docgen.New(
+	docgen.WithTimeout(5 * time.Second),
+	docgen.WithPDFRenderMode(docgen.PDFRenderChromium), // or PDFRenderAuto, PDFRenderLight
+)
 ```
 
 `Generator` methods:
@@ -147,11 +162,23 @@ if err != nil {
 {{row "Users" .TotalUsers}}
 ```
 
+## PDF engine and performance
+
+`WithPDFRenderMode` is evaluated when you call `docgen.New` (not per `PDF` call):
+
+| Mode | Behavior | Typical latency | Fidelity |
+| --- | --- | --- | --- |
+| `PDFRenderAuto` (default) | Chromium (chromedp) first; on failure, `gofpdf` text path | Dominated by Chromium when it succeeds (~0.5–2 s cold per run, machine-dependent) | Full HTML/CSS when Chromium succeeds |
+| `PDFRenderChromium` | Chromium only; errors propagate | Same as Auto when Chromium succeeds | Full HTML/CSS |
+| `PDFRenderLight` | `gofpdf` `MultiCell` only; no browser | Sub-millisecond to low milliseconds for small HTML strings | **Not** HTML layout—tags show as text; use only when that is acceptable |
+
+For **apples-to-apples** wall times against wkhtmltopdf, Chrome CLI, and the light path, use `cmd/pdfcompare` (see below). Repository benchmarks still omit PDF because numbers vary with OS, GPU, and whether Chromium is already warm.
+
 ## Error Handling Notes
 
 - Invalid template syntax returns template parse errors.
 - Missing template files return file read errors.
-- PDF rendering tries Chromium first, then falls back to a lightweight renderer.
+- PDF: with `PDFRenderAuto`, Chromium is tried first, then the lightweight path. With `PDFRenderChromium`, only Chromium is used. With `PDFRenderLight`, only the lightweight path is used.
 
 ## Testing
 
@@ -179,7 +206,7 @@ go test -run='^$' -bench BenchmarkGenerator -benchmem .
 
 Notes:
 
-- PDF benchmark is intentionally omitted because it depends on external browser/runtime conditions and can produce unstable numbers across machines.
+- PDF **unit** benchmarks are not included in `go test -bench` for this module: chromedp/Chromium startup dominates and results differ widely by machine and cache state. Use `cmd/pdfcompare` for reproducible local comparisons between backends.
 
 ### PDF vs other backends (local comparison)
 
@@ -215,7 +242,8 @@ Same environment as the CSV/Excel table below (`darwin` / `arm64` / Apple M2). C
 | Backend | Median (sample) | Brief notes |
 | --- | ---: | --- |
 | chromedp (`RenderChromeDP`) | ~1.6 s | CDP + `PrintToPDF`, Chromium process |
-| go-docgen `Generator.PDF` | ~0.9–1.6 s | HTML template + chromedp (variance across runs) |
+| go-docgen `Generator.PDF` (`PDFRenderAuto`) | ~0.9–1.6 s | HTML template + chromedp, same as default `New()` |
+| go-docgen `PDFRenderLight` | ~2 ms (order of gofpdf row) | No Chromium; not real HTML rendering |
 | Chrome CLI `--print-to-pdf` | ~2.0 s | Spawns a new Chrome process per iteration |
 | libwkhtmltox (`adrg/go-wkhtmltopdf`) | ~0.4–0.5 s | WebKit/Qt in-process, no subprocess |
 | gofpdf `MultiCell` (text fallback) | ~2 ms | Not HTML layout; baseline only |
@@ -231,7 +259,7 @@ Warning: wkhtmltopdf / libwkhtmltox is **no longer maintained** upstream; Chromi
 
 ### Performance optimizations (in code)
 
-- **HTML / text templates** (`template` package): parsed templates are cached by source string and cloned per render, which speeds up repeated PDF HTML rendering when the template string is reused.
+- **HTML / text templates** (`template` package): parsed templates are cached by source string and cloned per render, which speeds up repeated PDF HTML rendering when the template string is reused. Choosing `PDFRenderLight` avoids Chromium entirely when plain-text PDF output is enough.
 - **CSV / Excel row helpers** (`engine/csv`, `engine/excel`): cell values use `internal/strfmt.FormatAny` with fast paths for common scalar types instead of always using `fmt.Sprintf`, which reduces allocations in hot loops.
 - **Excel writer** (`engine/excel`): rows are written with `SetSheetRow` instead of one `SetCellValue` per cell (fewer high-level calls for the same data).
 - **CSV / Excel `text/template` parse**: `text/template` requires `Funcs` to be registered **before** `Parse`, and row/sheet helpers close over per-run state, so we **cannot** safely reuse a single parsed template the same way as HTML. Further gains there would need a different API (for example accepting a pre-parsed template or a row sink on `data`).

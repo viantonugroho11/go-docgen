@@ -19,6 +19,16 @@ func TestNew_AppliesTimeoutOption(t *testing.T) {
 	}
 }
 
+func TestNew_AppliesPDFRenderModeOption(t *testing.T) {
+	g, ok := New(WithPDFRenderMode(PDFRenderLight)).(*generator)
+	if !ok {
+		t.Fatal("expected concrete *generator type")
+	}
+	if g.cfg.PDFRenderMode != PDFRenderLight {
+		t.Fatalf("PDFRenderMode = %v, want PDFRenderLight", g.cfg.PDFRenderMode)
+	}
+}
+
 func TestGenerator_CSV(t *testing.T) {
 	gen := New()
 
@@ -71,6 +81,17 @@ func TestGenerator_Excel(t *testing.T) {
 	}
 	if len(out) == 0 {
 		t.Fatal("Excel() returned empty bytes")
+	}
+}
+
+func TestGenerator_PDF_LightMode(t *testing.T) {
+	gen := New(WithPDFRenderMode(PDFRenderLight))
+	out, err := gen.PDF(context.Background(), `<p>x</p>`, nil)
+	if err != nil {
+		t.Fatalf("PDF() error = %v", err)
+	}
+	if len(out) == 0 {
+		t.Fatal("PDF() returned empty bytes")
 	}
 }
 

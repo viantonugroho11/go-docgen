@@ -33,7 +33,7 @@ type generator struct {
 	excelEngine excel.Engine
 }
 
-// New returns a Generator with optional configuration (see WithTimeout).
+// New returns a Generator with optional configuration (see WithTimeout, WithPDFRenderMode).
 func New(opts ...Option) Generator {
 	cfg := defaultConfig()
 	for _, o := range opts {
@@ -41,9 +41,12 @@ func New(opts ...Option) Generator {
 	}
 
 	return &generator{
-		cfg:         cfg,
-		htmlTmpl:    template.NewHTML(),
-		pdfEngine:   pdf.New(cfg.Timeout),
+		cfg:      cfg,
+		htmlTmpl: template.NewHTML(),
+		pdfEngine: pdf.New(pdf.EngineConfig{
+			Timeout: cfg.Timeout,
+			Mode:    pdf.RenderMode(cfg.PDFRenderMode),
+		}),
 		csvEngine:   csv.New(),
 		excelEngine: excel.New(),
 	}

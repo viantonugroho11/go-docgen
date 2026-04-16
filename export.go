@@ -1,4 +1,5 @@
-package godocgen
+// Package docgen generates PDF, CSV, and Excel documents from templates.
+package docgen
 
 import (
 	"context"
@@ -10,88 +11,88 @@ import (
 	"github.com/viantonugroho11/go-docgen/template"
 )
 
-type Exporter interface {
-	ToPDFTemplate(ctx context.Context, tmpl string, data any) ([]byte, error)
-	ToPDFFromFile(ctx context.Context, path string, data any) ([]byte, error)
+// Generator turns templates plus data into document bytes (PDF, CSV, or XLSX).
+type Generator interface {
+	PDF(ctx context.Context, template string, data any) ([]byte, error)
+	PDFFromFile(ctx context.Context, path string, data any) ([]byte, error)
 
-	ToCSVTemplate(ctx context.Context, tmpl string, data any) ([]byte, error)
-	ToCSVFromFile(ctx context.Context, path string, data any) ([]byte, error)
+	CSV(ctx context.Context, template string, data any) ([]byte, error)
+	CSVFromFile(ctx context.Context, path string, data any) ([]byte, error)
 
-	ToExcelTemplate(ctx context.Context, tmpl string, data any) ([]byte, error)
-	ToExcelFromFile(ctx context.Context, path string, data any) ([]byte, error)
+	Excel(ctx context.Context, template string, data any) ([]byte, error)
+	ExcelFromFile(ctx context.Context, path string, data any) ([]byte, error)
 }
 
-type exporter struct {
+type generator struct {
 	cfg Config
 
 	htmlTmpl template.Engine
-	textTmpl template.Engine
 
 	pdfEngine   pdf.Engine
 	csvEngine   csv.Engine
 	excelEngine excel.Engine
 }
 
-func New(opts ...Option) Exporter {
+// New returns a Generator with optional configuration (see WithTimeout).
+func New(opts ...Option) Generator {
 	cfg := defaultConfig()
 	for _, o := range opts {
 		o(&cfg)
 	}
 
-	return &exporter{
+	return &generator{
 		cfg:         cfg,
 		htmlTmpl:    template.NewHTML(),
-		textTmpl:    template.NewText(),
 		pdfEngine:   pdf.New(cfg.Timeout),
 		csvEngine:   csv.New(),
 		excelEngine: excel.New(),
 	}
 }
 
-func (e *exporter) ToPDFTemplate(ctx context.Context, tmpl string, data any) ([]byte, error) {
-	html, err := e.htmlTmpl.Render(tmpl, data)
+func (g *generator) PDF(ctx context.Context, template string, data any) ([]byte, error) {
+	html, err := g.htmlTmpl.Render(template, data)
 	if err != nil {
 		return nil, err
 	}
-	return e.pdfEngine.Render(ctx, html)
+	return g.pdfEngine.Render(ctx, html)
 }
 
-func (e *exporter) ToPDFFromFile(ctx context.Context, path string, data any) ([]byte, error) {
+func (g *generator) PDFFromFile(ctx context.Context, path string, data any) ([]byte, error) {
 	tmpl, err := loader.Load(path)
 	if err != nil {
 		return nil, err
 	}
-	return e.ToPDFTemplate(ctx, tmpl, data)
+	return g.PDF(ctx, tmpl, data)
 }
 
-func (e *exporter) ToCSVTemplate(ctx context.Context, tmpl string, data any) ([]byte, error) {
-	rows, err := csv.Build(tmpl, data)
+func (g *generator) CSV(ctx context.Context, template string, data any) ([]byte, error) {
+	rows, err := csv.Build(template, data)
 	if err != nil {
 		return nil, err
 	}
-	return e.csvEngine.Generate(rows)
+	return g.csvEngine.Generate(rows)
 }
 
-func (e *exporter) ToCSVFromFile(ctx context.Context, path string, data any) ([]byte, error) {
+func (g *generator) CSVFromFile(ctx context.Context, path string, data any) ([]byte, error) {
 	tmpl, err := loader.Load(path)
 	if err != nil {
 		return nil, err
 	}
-	return e.ToCSVTemplate(ctx, tmpl, data)
+	return g.CSV(ctx, tmpl, data)
 }
 
-func (e *exporter) ToExcelTemplate(ctx context.Context, tmpl string, data any) ([]byte, error) {
-	sheets, err := excel.Build(tmpl, data)
+func (g *generator) Excel(ctx context.Context, template string, data any) ([]byte, error) {
+	sheets, err := excel.Build(template, data)
 	if err != nil {
 		return nil, err
 	}
-	return e.excelEngine.Generate(sheets)
+	return g.excelEngine.Generate(sheets)
 }
 
-func (e *exporter) ToExcelFromFile(ctx context.Context, path string, data any) ([]byte, error) {
+func (g *generator) ExcelFromFile(ctx context.Context, path string, data any) ([]byte, error) {
 	tmpl, err := loader.Load(path)
 	if err != nil {
 		return nil, err
 	}
-	return e.ToExcelTemplate(ctx, tmpl, data)
+	return g.Excel(ctx, tmpl, data)
 }

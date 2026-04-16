@@ -1,14 +1,14 @@
-package godocgen_test
+package docgen_test
 
 import (
 	"context"
 	"fmt"
 
-	godocgen "github.com/viantonugroho11/go-docgen"
+	"github.com/viantonugroho11/go-docgen"
 )
 
-func ExampleExporter_ToCSVTemplate() {
-	exp := godocgen.New()
+func ExampleGenerator_CSV() {
+	gen := docgen.New()
 	tmpl := `{{row "name" "age"}}{{range .People}}{{row .Name .Age}}{{end}}`
 	data := map[string]any{
 		"People": []map[string]any{
@@ -16,7 +16,7 @@ func ExampleExporter_ToCSVTemplate() {
 		},
 	}
 
-	out, err := exp.ToCSVTemplate(context.Background(), tmpl, data)
+	out, err := gen.CSV(context.Background(), tmpl, data)
 	if err != nil {
 		panic(err)
 	}
@@ -25,8 +25,8 @@ func ExampleExporter_ToCSVTemplate() {
 	// Output: true
 }
 
-func ExampleExporter_ToExcelTemplate() {
-	exp := godocgen.New()
+func ExampleGenerator_Excel() {
+	gen := docgen.New()
 	tmpl := `{{sheet "Users"}}{{row "name"}}{{range .Users}}{{row .Name}}{{end}}`
 	data := map[string]any{
 		"Users": []map[string]any{
@@ -34,7 +34,7 @@ func ExampleExporter_ToExcelTemplate() {
 		},
 	}
 
-	out, err := exp.ToExcelTemplate(context.Background(), tmpl, data)
+	out, err := gen.Excel(context.Background(), tmpl, data)
 	if err != nil {
 		panic(err)
 	}

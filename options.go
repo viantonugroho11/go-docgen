@@ -1,4 +1,4 @@
-package godocgen
+package docgen
 
 import "time"
 

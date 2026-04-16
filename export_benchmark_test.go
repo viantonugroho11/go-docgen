@@ -1,4 +1,4 @@
-package godocgen
+package docgen
 
 import (
 	"context"
@@ -27,8 +27,8 @@ func benchmarkExcelData() map[string]any {
 	return map[string]any{"Users": users}
 }
 
-func BenchmarkExporter_ToCSVTemplate(b *testing.B) {
-	exp := New()
+func BenchmarkGenerator_CSV(b *testing.B) {
+	gen := New()
 	ctx := context.Background()
 	tmpl := `{{row "Name" "Age"}}{{range .People}}{{row .Name .Age}}{{end}}`
 	data := benchmarkCSVData()
@@ -36,14 +36,14 @@ func BenchmarkExporter_ToCSVTemplate(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := exp.ToCSVTemplate(ctx, tmpl, data); err != nil {
-			b.Fatalf("ToCSVTemplate() error = %v", err)
+		if _, err := gen.CSV(ctx, tmpl, data); err != nil {
+			b.Fatalf("CSV() error = %v", err)
 		}
 	}
 }
 
-func BenchmarkExporter_ToExcelTemplate(b *testing.B) {
-	exp := New()
+func BenchmarkGenerator_Excel(b *testing.B) {
+	gen := New()
 	ctx := context.Background()
 	tmpl := `{{sheet "Users"}}{{row "Name" "Role"}}{{range .Users}}{{row .Name .Role}}{{end}}`
 	data := benchmarkExcelData()
@@ -51,8 +51,8 @@ func BenchmarkExporter_ToExcelTemplate(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		if _, err := exp.ToExcelTemplate(ctx, tmpl, data); err != nil {
-			b.Fatalf("ToExcelTemplate() error = %v", err)
+		if _, err := gen.Excel(ctx, tmpl, data); err != nil {
+			b.Fatalf("Excel() error = %v", err)
 		}
 	}
 }

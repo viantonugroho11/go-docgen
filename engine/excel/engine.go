@@ -26,9 +26,12 @@ func (e *engine) Generate(sheets []Sheet) ([]byte, error) {
 		}
 
 		for r, row := range s.Rows {
-			for c, val := range row {
-				cell, _ := excelize.CoordinatesToCellName(c+1, r+1)
-				f.SetCellValue(name, cell, val)
+			startCell, err := excelize.CoordinatesToCellName(1, r+1)
+			if err != nil {
+				return nil, err
+			}
+			if err := f.SetSheetRow(name, startCell, &row); err != nil {
+				return nil, err
 			}
 		}
 	}

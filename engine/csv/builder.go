@@ -2,8 +2,9 @@ package csv
 
 import (
 	"bytes"
-	"fmt"
 	texttmpl "text/template"
+
+	"github.com/viantonugroho11/go-docgen/internal/strfmt"
 )
 
 func Build(tmpl string, data any) ([][]string, error) {
@@ -13,7 +14,7 @@ func Build(tmpl string, data any) ([][]string, error) {
 		"row": func(values ...any) string {
 			r := make([]string, len(values))
 			for i, v := range values {
-				r[i] = fmt.Sprintf("%v", v)
+				r[i] = strfmt.FormatAny(v)
 			}
 			rows = append(rows, r)
 			return ""
@@ -25,6 +26,7 @@ func Build(tmpl string, data any) ([][]string, error) {
 		return nil, err
 	}
 
-	_ = t.Execute(&bytes.Buffer{}, data)
+	var buf bytes.Buffer
+	_ = t.Execute(&buf, data)
 	return rows, nil
 }

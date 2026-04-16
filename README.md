@@ -18,33 +18,50 @@ go get github.com/viantonugroho11/go-docgen
 
 - Unified API for `PDF`, `CSV`, and `Excel`
 - Works with in-memory templates and file-based templates
-- Small public surface area (`New`, `To*Template`, `To*FromFile`)
+- Small public surface area (`docgen.New`, `Generator` methods: `PDF`, `CSV`, `Excel`, and `*FromFile` variants)
 - Extensible internals split by engine (`engine/csv`, `engine/excel`, `engine/pdf`)
 
 ## Core API
 
-Create exporter:
+The library root package is `docgen` (same module path: `github.com/viantonugroho11/go-docgen`).
+
+Create a generator:
 
 ```go
-exp := godocgen.New()
+import "github.com/viantonugroho11/go-docgen"
+
+gen := docgen.New()
 ```
 
 Optional config:
 
 ```go
-exp := godocgen.New(godocgen.WithTimeout(5 * time.Second))
+gen := docgen.New(docgen.WithTimeout(5 * time.Second))
 ```
 
-Main methods:
+`Generator` methods:
 
-- `ToPDFTemplate(ctx, tmpl, data)`
-- `ToPDFFromFile(ctx, path, data)`
-- `ToCSVTemplate(ctx, tmpl, data)`
-- `ToCSVFromFile(ctx, path, data)`
-- `ToExcelTemplate(ctx, tmpl, data)`
-- `ToExcelFromFile(ctx, path, data)`
+- `PDF(ctx, template, data)` — HTML template → PDF bytes
+- `PDFFromFile(ctx, path, data)` — template file → PDF bytes
+- `CSV(ctx, template, data)` — text template → CSV bytes
+- `CSVFromFile(ctx, path, data)`
+- `Excel(ctx, template, data)` — text template → XLSX bytes
+- `ExcelFromFile(ctx, path, data)`
 
 ## Usage Examples
+
+Assume:
+
+```go
+import (
+	"context"
+	"os"
+
+	"github.com/viantonugroho11/go-docgen"
+)
+
+gen := docgen.New()
+```
 
 ### CSV Example
 
@@ -57,7 +74,7 @@ csvData := map[string]any{
 	},
 }
 
-csvBytes, err := exp.ToCSVTemplate(context.Background(), csvTpl, csvData)
+csvBytes, err := gen.CSV(context.Background(), csvTpl, csvData)
 if err != nil {
 	panic(err)
 }
@@ -79,7 +96,7 @@ excelData := map[string]any{
 	},
 }
 
-excelBytes, err := exp.ToExcelTemplate(context.Background(), excelTpl, excelData)
+excelBytes, err := gen.Excel(context.Background(), excelTpl, excelData)
 if err != nil {
 	panic(err)
 }
@@ -90,7 +107,7 @@ _ = os.WriteFile("users.xlsx", excelBytes, 0o644)
 
 ```go
 pdfTpl := `<h1>Hello {{.Name}}</h1><p>Welcome to go-docgen.</p>`
-pdfBytes, err := exp.ToPDFTemplate(context.Background(), pdfTpl, map[string]any{"Name": "Alice"})
+pdfBytes, err := gen.PDF(context.Background(), pdfTpl, map[string]any{"Name": "Alice"})
 if err != nil {
 	panic(err)
 }
@@ -100,7 +117,7 @@ _ = os.WriteFile("hello.pdf", pdfBytes, 0o644)
 ### File-based Template Example
 
 ```go
-bytes, err := exp.ToCSVFromFile(context.Background(), "templates/report.csv.tmpl", data)
+bytes, err := gen.CSVFromFile(context.Background(), "templates/report.csv.tmpl", data)
 if err != nil {
 	panic(err)
 }
@@ -154,17 +171,24 @@ Run all benchmarks:
 go test -run='^$' -bench . -benchmem ./...
 ```
 
-Run exporter-specific benchmarks only:
+Run generator-specific benchmarks only:
 
 ```bash
-go test -run='^$' -bench BenchmarkExporter -benchmem .
+go test -run='^$' -bench BenchmarkGenerator -benchmem .
 ```
 
 Notes:
 
 - PDF benchmark is intentionally omitted because it depends on external browser/runtime conditions and can produce unstable numbers across machines.
 
-### Latest Benchmark Result (Sample)
+### Performance optimizations (in code)
+
+- **HTML / text templates** (`template` package): parsed templates are cached by source string and cloned per render, which speeds up repeated PDF HTML rendering when the template string is reused.
+- **CSV / Excel row helpers** (`engine/csv`, `engine/excel`): cell values use `internal/strfmt.FormatAny` with fast paths for common scalar types instead of always using `fmt.Sprintf`, which reduces allocations in hot loops.
+- **Excel writer** (`engine/excel`): rows are written with `SetSheetRow` instead of one `SetCellValue` per cell (fewer high-level calls for the same data).
+- **CSV / Excel `text/template` parse**: `text/template` requires `Funcs` to be registered **before** `Parse`, and row/sheet helpers close over per-run state, so we **cannot** safely reuse a single parsed template the same way as HTML. Further gains there would need a different API (for example accepting a pre-parsed template or a row sink on `data`).
+
+### Latest benchmark result (sample, after optimizations)
 
 Environment:
 
@@ -182,11 +206,11 @@ Result summary:
 
 | Benchmark | ns/op | B/op | allocs/op |
 | --- | ---: | ---: | ---: |
-| `BenchmarkExporter_ToCSVTemplate` | 89745 | 44758 | 1379 |
-| `BenchmarkExporter_ToExcelTemplate` | 1464491 | 811963 | 7979 |
-| `engine/csv.BenchmarkBuild` | 6172 | 5683 | 97 |
-| `engine/csv.BenchmarkGenerate` | 3129 | 5040 | 3 |
-| `engine/excel.BenchmarkBuild` | 7343 | 6267 | 112 |
-| `engine/excel.BenchmarkGenerate` | 1288893 | 762705 | 6587 |
+| `BenchmarkGenerator_CSV` | 79312 | 44013 | 1197 |
+| `BenchmarkGenerator_Excel` | 1407766 | 804018 | 8081 |
+| `engine/csv.BenchmarkBuild` | 6552 | 5659 | 91 |
+| `engine/csv.BenchmarkGenerate` | 3108 | 5040 | 3 |
+| `engine/excel.BenchmarkBuild` | 7266 | 6236 | 106 |
+| `engine/excel.BenchmarkGenerate` | 1337422 | 743901 | 6891 |
 
 These numbers are machine-dependent. Use them as a baseline and compare against your own environment when optimizing.

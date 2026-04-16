@@ -2,8 +2,9 @@ package excel
 
 import (
 	"bytes"
-	"fmt"
 	texttmpl "text/template"
+
+	"github.com/viantonugroho11/go-docgen/internal/strfmt"
 )
 
 type Sheet struct {
@@ -24,7 +25,8 @@ func Build(tmpl string, data any) ([]Sheet, error) {
 		return nil, err
 	}
 
-	_ = t.Execute(&bytes.Buffer{}, data)
+	var buf bytes.Buffer
+	_ = t.Execute(&buf, data)
 	return b.sheets, nil
 }
 
@@ -43,7 +45,7 @@ func (b *builder) sheet(name string) string {
 func (b *builder) row(values ...any) string {
 	r := make([]string, len(values))
 	for i, v := range values {
-		r[i] = fmt.Sprintf("%v", v)
+		r[i] = strfmt.FormatAny(v)
 	}
 	b.cur.Rows = append(b.cur.Rows, r)
 	return ""

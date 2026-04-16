@@ -1,4 +1,4 @@
-package godocgen
+package docgen
 
 import (
 	"context"
@@ -10,17 +10,17 @@ import (
 )
 
 func TestNew_AppliesTimeoutOption(t *testing.T) {
-	exp, ok := New(WithTimeout(2 * time.Second)).(*exporter)
+	g, ok := New(WithTimeout(2 * time.Second)).(*generator)
 	if !ok {
-		t.Fatal("expected concrete *exporter type")
+		t.Fatal("expected concrete *generator type")
 	}
-	if exp.cfg.Timeout != 2*time.Second {
-		t.Fatalf("timeout = %v, want %v", exp.cfg.Timeout, 2*time.Second)
+	if g.cfg.Timeout != 2*time.Second {
+		t.Fatalf("timeout = %v, want %v", g.cfg.Timeout, 2*time.Second)
 	}
 }
 
-func TestToCSVTemplate(t *testing.T) {
-	exp := New()
+func TestGenerator_CSV(t *testing.T) {
+	gen := New()
 
 	tmpl := `{{row "name" "age"}}{{range .People}}{{row .Name .Age}}{{end}}`
 	data := map[string]any{
@@ -29,17 +29,17 @@ func TestToCSVTemplate(t *testing.T) {
 		},
 	}
 
-	out, err := exp.ToCSVTemplate(context.Background(), tmpl, data)
+	out, err := gen.CSV(context.Background(), tmpl, data)
 	if err != nil {
-		t.Fatalf("ToCSVTemplate() error = %v", err)
+		t.Fatalf("CSV() error = %v", err)
 	}
 	if !strings.Contains(string(out), "Alice,30") {
-		t.Fatalf("ToCSVTemplate() output = %q", string(out))
+		t.Fatalf("CSV() output = %q", string(out))
 	}
 }
 
-func TestToCSVFromFile(t *testing.T) {
-	exp := New()
+func TestGenerator_CSVFromFile(t *testing.T) {
+	gen := New()
 	dir := t.TempDir()
 	file := filepath.Join(dir, "people.csv.tmpl")
 	tmpl := `{{row "name"}}{{range .People}}{{row .Name}}{{end}}`
@@ -48,34 +48,34 @@ func TestToCSVFromFile(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	out, err := exp.ToCSVFromFile(context.Background(), file, map[string]any{
+	out, err := gen.CSVFromFile(context.Background(), file, map[string]any{
 		"People": []map[string]any{{"Name": "Bob"}},
 	})
 	if err != nil {
-		t.Fatalf("ToCSVFromFile() error = %v", err)
+		t.Fatalf("CSVFromFile() error = %v", err)
 	}
 	if !strings.Contains(string(out), "Bob") {
-		t.Fatalf("ToCSVFromFile() output = %q", string(out))
+		t.Fatalf("CSVFromFile() output = %q", string(out))
 	}
 }
 
-func TestToExcelTemplate(t *testing.T) {
-	exp := New()
+func TestGenerator_Excel(t *testing.T) {
+	gen := New()
 	tmpl := `{{sheet "Users"}}{{row "name"}}{{range .Users}}{{row .Name}}{{end}}`
 
-	out, err := exp.ToExcelTemplate(context.Background(), tmpl, map[string]any{
+	out, err := gen.Excel(context.Background(), tmpl, map[string]any{
 		"Users": []map[string]any{{"Name": "Alice"}},
 	})
 	if err != nil {
-		t.Fatalf("ToExcelTemplate() error = %v", err)
+		t.Fatalf("Excel() error = %v", err)
 	}
 	if len(out) == 0 {
-		t.Fatal("ToExcelTemplate() returned empty bytes")
+		t.Fatal("Excel() returned empty bytes")
 	}
 }
 
-func TestToPDFFromFile(t *testing.T) {
-	exp := New()
+func TestGenerator_PDFFromFile(t *testing.T) {
+	gen := New()
 	dir := t.TempDir()
 	file := filepath.Join(dir, "hello.html.tmpl")
 	tmpl := `<h1>Hello {{.Name}}</h1>`
@@ -84,18 +84,18 @@ func TestToPDFFromFile(t *testing.T) {
 		t.Fatalf("WriteFile() error = %v", err)
 	}
 
-	out, err := exp.ToPDFFromFile(context.Background(), file, map[string]any{"Name": "Alice"})
+	out, err := gen.PDFFromFile(context.Background(), file, map[string]any{"Name": "Alice"})
 	if err != nil {
-		t.Fatalf("ToPDFFromFile() error = %v", err)
+		t.Fatalf("PDFFromFile() error = %v", err)
 	}
 	if len(out) == 0 {
-		t.Fatal("ToPDFFromFile() returned empty bytes")
+		t.Fatal("PDFFromFile() returned empty bytes")
 	}
 }
 
-func TestFromFile_NotFound(t *testing.T) {
-	exp := New()
-	_, err := exp.ToCSVFromFile(context.Background(), "/not/exist.tmpl", nil)
+func TestGenerator_CSVFromFile_NotFound(t *testing.T) {
+	gen := New()
+	_, err := gen.CSVFromFile(context.Background(), "/not/exist.tmpl", nil)
 	if err == nil {
 		t.Fatal("expected error for missing file, got nil")
 	}

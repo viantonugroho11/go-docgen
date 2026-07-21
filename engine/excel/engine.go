@@ -2,9 +2,12 @@ package excel
 
 import (
 	"bytes"
+	"sync"
 
 	"github.com/xuri/excelize/v2"
 )
+
+var excelGenBuf = sync.Pool{New: func() any { return new(bytes.Buffer) }}
 
 type Engine interface {
 	Generate(sheets []Sheet) ([]byte, error)
@@ -36,7 +39,15 @@ func (e *engine) Generate(sheets []Sheet) ([]byte, error) {
 		}
 	}
 
-	var buf bytes.Buffer
-	err := f.Write(&buf)
-	return buf.Bytes(), err
+	buf := excelGenBuf.Get().(*bytes.Buffer)
+	buf.Reset()
+	err := f.Write(buf)
+	if err != nil {
+		excelGenBuf.Put(buf)
+		return nil, err
+	}
+	out := make([]byte, buf.Len())
+	copy(out, buf.Bytes())
+	excelGenBuf.Put(buf)
+	return out, nil
 }

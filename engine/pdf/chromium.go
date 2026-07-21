@@ -7,21 +7,28 @@ import (
 	"github.com/chromedp/chromedp"
 )
 
-// RenderChromeDP renders HTML to PDF using headless Chromium via chromedp.
-// Unlike Engine.Render, this does not fall back to the lightweight PDF path.
+// RenderChromeDP renders HTML to PDF using a fresh headless Chromium instance.
+// Unlike Engine.Render, this does not fall back to the lightweight PDF path
+// and does not reuse a persistent browser process.
 func RenderChromeDP(ctx context.Context, html string) ([]byte, error) {
-	return chromium(ctx, html)
+	// ctx carries the caller's deadline; allocCtx is a child of ctx so the
+	// entire stack (allocator → browser → tab) is cancelled when ctx expires.
+	allocCtx, allocCancel := chromedp.NewExecAllocator(ctx, chromedp.DefaultExecAllocatorOptions[:]...)
+	defer allocCancel()
+	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
+	defer browserCancel()
+	tabCtx, tabCancel := chromedp.NewContext(browserCtx)
+	defer tabCancel()
+	return renderInTab(tabCtx, html)
 }
 
-// chromium injects HTML via Page.setDocumentContent instead of a data: URL to avoid url.PathEscape
-// duplicating the full markup on the Go heap (CDP still carries the payload to the browser).
-func chromium(ctx context.Context, html string) ([]byte, error) {
-	ctx, cancel := chromedp.NewContext(ctx)
-	defer cancel()
-
+// renderInTab runs the PDF render pipeline using tabCtx (a chromedp tab context
+// that is already bound to a browser). The caller is responsible for creating and
+// cancelling tabCtx.
+func renderInTab(tabCtx context.Context, html string) ([]byte, error) {
 	var buf []byte
-	err := chromedp.Run(ctx,
-		chromedp.Navigate("about:blank"),
+	err := chromedp.Run(tabCtx,
+		// New tabs start at about:blank — Navigate is redundant and costs a round-trip.
 		chromedp.ActionFunc(func(ctx context.Context) error {
 			frameTree, err := page.GetFrameTree().Do(ctx)
 			if err != nil {

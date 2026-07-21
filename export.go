@@ -44,8 +44,9 @@ func New(opts ...Option) Generator {
 		cfg:      cfg,
 		htmlTmpl: template.NewHTML(),
 		pdfEngine: pdf.New(pdf.EngineConfig{
-			Timeout: cfg.Timeout,
-			Mode:    pdf.RenderMode(cfg.PDFRenderMode),
+			Timeout:        cfg.Timeout,
+			Mode:           pdf.RenderMode(cfg.PDFRenderMode),
+			MaxConcurrency: cfg.PDFMaxConcurrency,
 		}),
 		csvEngine:   csv.New(),
 		excelEngine: excel.New(),

@@ -19,8 +19,9 @@ const (
 )
 
 type Config struct {
-	Timeout         time.Duration
-	PDFRenderMode   PDFRenderMode
+	Timeout            time.Duration
+	PDFRenderMode      PDFRenderMode
+	PDFMaxConcurrency  int
 }
 
 type Option func(*Config)
@@ -35,6 +36,16 @@ func WithTimeout(timeout time.Duration) Option {
 func WithPDFRenderMode(mode PDFRenderMode) Option {
 	return func(cfg *Config) {
 		cfg.PDFRenderMode = mode
+	}
+}
+
+// WithPDFMaxConcurrency sets the maximum number of concurrent Chromium tab renders.
+// Defaults to runtime.GOMAXPROCS(0) when zero or negative.
+// Tune higher for throughput-heavy workloads; lower to cap memory usage per pod.
+// Has no effect when PDFRenderMode is PDFRenderLight.
+func WithPDFMaxConcurrency(n int) Option {
+	return func(cfg *Config) {
+		cfg.PDFMaxConcurrency = n
 	}
 }
 

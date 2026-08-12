@@ -4,11 +4,82 @@ All notable changes to go-docgen are documented here.
 
 ---
 
-## [Unreleased] — Performance & Concurrency Optimization
+## [0.2.0] — 2026-08-12 — Performance, Slim Chromium, Tab Pool
 
 ### Summary
 
-This release focuses exclusively on internal performance improvements. **No public API changes**; all existing code continues to compile and behave identically.
+Second round of PDF-path optimization plus new options to shrink container
+images. Fully backwards-compatible: existing code compiles and runs
+unchanged.
+
+Headline numbers (Apple M2, `go1.25.0`, `-benchtime=20x`):
+
+| Bench | Before (v0.1.x) | This release | Δ |
+|---|--:|--:|--:|
+| `Render_Chromium` (small) | ~793 ms | **~635 ms** | −20% |
+| `Render_Chromium_Medium` | ~800 ms | **~640 ms** | −20% |
+| `Render_Wkhtmltopdf` (ref) | n/a | ~490 ms | reference |
+
+Container image with Chromium: **~200 MB → ~80 MB** by pointing
+`WithPDFChromePath` at `chrome-headless-shell`.
+
+---
+
+### New Options
+
+#### `WithPDFChromePath(path string) Option`
+
+Override the Chromium binary. Point at `chrome-headless-shell` (Chrome's
+Blink-only rendering shell, ~80 MB) instead of full Chrome (~200 MB) —
+byte-equivalent PDF output.
+
+```go
+// One-time install (e.g. Docker build stage):
+//   npx @puppeteer/browsers install chrome-headless-shell@stable
+gen := docgen.New(
+    docgen.WithPDFRenderMode(docgen.PDFRenderChromium),
+    docgen.WithPDFChromePath("/opt/chrome-headless-shell/chrome-headless-shell"),
+)
+```
+
+#### `WithPDFExtraFlags(flags ...string) Option`
+
+Append extra Chromium command-line flags after the chromedp defaults. Each
+entry is `"flag"` (bool true) or `"flag=value"`.
+
+```go
+docgen.WithPDFExtraFlags(
+    "font-render-hinting=none",
+    "hide-scrollbars",
+)
+```
+
+---
+
+### Performance Improvements
+
+#### PDF Engine (`engine/pdf`)
+
+| Change | Impact |
+|--------|--------|
+| Reusable tab pool (`chan *tabHandle`) replaces plain semaphore | Skips ~200–500 ms `chromedp.NewContext` (Target.create + Page.enable) per render after warmup. Pool doubles as the concurrency gate. |
+| Dropped `chromedp.WaitReady("html")` after `SetDocumentContent` | `page.SetDocumentContent` installs the DOM synchronously on the browser side. WaitReady was pure CDP round-trip overhead. Saves ~5–30 ms per render. |
+
+#### HTML Template (`template/html.go`)
+
+| Change | Impact |
+|--------|--------|
+| Dropped per-render `Clone()` | `html/template.Template.Execute` is documented safe for concurrent use once parsed. Saves one full AST copy per render. |
+| Pooled exec buffer via `sync.Pool` | Reduces GC pressure. |
+| `LoadOrStore` on the parse cache | First-miss race can no longer double-parse. |
+
+---
+
+## [0.1.1] — Performance & Concurrency Optimization
+
+### Summary
+
+Internal performance improvements only. **No public API changes**; all existing code continues to compile and behave identically.
 
 ---
 

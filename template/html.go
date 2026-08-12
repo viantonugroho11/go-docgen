@@ -10,20 +10,23 @@ type htmlEngine struct{}
 
 func NewHTML() Engine { return &htmlEngine{} }
 
-var parsedHTML sync.Map // tmpl string -> *template.Template
+var (
+	parsedHTML  sync.Map // tmpl string -> *template.Template
+	htmlBufPool = sync.Pool{New: func() any { return new(bytes.Buffer) }}
+)
 
 func (e *htmlEngine) Render(tmpl string, data any) (string, error) {
-	base, err := parsedHTMLTemplate(tmpl)
+	t, err := parsedHTMLTemplate(tmpl)
 	if err != nil {
 		return "", err
 	}
-	t, err := base.Clone()
-	if err != nil {
+	buf := htmlBufPool.Get().(*bytes.Buffer)
+	buf.Reset()
+	defer htmlBufPool.Put(buf)
+	if err := t.Execute(buf, data); err != nil {
 		return "", err
 	}
-	var buf bytes.Buffer
-	err = t.Execute(&buf, data)
-	return buf.String(), err
+	return buf.String(), nil
 }
 
 func parsedHTMLTemplate(tmpl string) (*template.Template, error) {
@@ -34,6 +37,6 @@ func parsedHTMLTemplate(tmpl string) (*template.Template, error) {
 	if err != nil {
 		return nil, err
 	}
-	parsedHTML.Store(tmpl, parsed)
-	return parsed, nil
+	actual, _ := parsedHTML.LoadOrStore(tmpl, parsed)
+	return actual.(*template.Template), nil
 }

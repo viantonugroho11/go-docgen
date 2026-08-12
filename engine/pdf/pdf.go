@@ -28,6 +28,16 @@ type EngineConfig struct {
 	// Use for site-specific tuning (e.g. --font-render-hinting=none for
 	// deterministic screenshots). Has no effect for RenderModeLight.
 	ExtraFlags []string
+	// CacheSize sets the maximum number of rendered PDFs cached in memory,
+	// keyed by sha256 of the input HTML. A hit skips the whole render
+	// pipeline (browser round-trip + PrintToPDF) — effective latency ~0 ms.
+	// Zero disables the cache. Cache is shared across all Mode values.
+	CacheSize int
+	// Prewarm launches the Chromium browser and all pooled tabs in a
+	// background goroutine at engine construction time, so the first Render
+	// call does not pay the ~200-500 ms cold-start cost. Ignored for
+	// RenderModeLight.
+	Prewarm bool
 }
 
 type config struct {
@@ -48,8 +58,9 @@ type tabHandle struct {
 }
 
 type engine struct {
-	cfg  config
-	pool chan *tabHandle // buffered maxConcurrency; nil entries are lazy slots
+	cfg   config
+	pool  chan *tabHandle // buffered maxConcurrency; nil entries are lazy slots
+	cache *pdfCache
 
 	// Persistent Chromium process — guarded by mu.
 	mu            sync.Mutex
@@ -82,14 +93,58 @@ func New(cfg EngineConfig) Engine {
 			chromePath:     cfg.ChromePath,
 			extraFlags:     append([]string(nil), cfg.ExtraFlags...),
 		},
+		cache: newCache(cfg.CacheSize),
 	}
 	if mode != RenderModeLight {
 		e.pool = make(chan *tabHandle, maxConc)
 		for i := 0; i < maxConc; i++ {
 			e.pool <- nil // lazy slot; materialised on first render
 		}
+		if cfg.Prewarm {
+			go e.prewarm()
+		}
 	}
 	return e
+}
+
+// prewarm boots the browser and materialises every pooled tab off the hot path,
+// so the first Render call does not pay startup cost. Safe to call at most once;
+// concurrent Render calls block on the same ensureBrowser mutex until warmup
+// completes, so there is no double-init race.
+func (e *engine) prewarm() {
+	if e.ensureBrowser() != nil {
+		return
+	}
+	e.mu.Lock()
+	browserCtx := e.browserCtx
+	e.mu.Unlock()
+	if browserCtx == nil {
+		return
+	}
+	drained := make([]*tabHandle, 0, cap(e.pool))
+	for i := 0; i < cap(e.pool); i++ {
+		select {
+		case h := <-e.pool:
+			if h == nil {
+				tabCtx, tabCancel := chromedp.NewContext(browserCtx)
+				// Force target creation now via a no-op Run so Page.enable
+				// fires while we are still warming.
+				if err := chromedp.Run(tabCtx); err != nil {
+					tabCancel()
+					drained = append(drained, nil)
+					continue
+				}
+				h = &tabHandle{ctx: tabCtx, cancel: tabCancel}
+			}
+			drained = append(drained, h)
+		default:
+			// Another render is holding this slot; give up on that one.
+			drained = append(drained, nil)
+		}
+	}
+	for _, h := range drained {
+		e.pool <- h
+	}
 }
 
 // Close shuts down the persistent browser process. Safe to call multiple times.
@@ -159,21 +214,35 @@ func (e *engine) ensureBrowser() error {
 }
 
 func (e *engine) Render(ctx context.Context, html string) ([]byte, error) {
+	if cached, ok := e.cache.get(html); ok {
+		// Return a defensive copy so callers cannot mutate the cached bytes.
+		out := make([]byte, len(cached))
+		copy(out, cached)
+		return out, nil
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, e.cfg.timeout)
 	defer cancel()
 
+	var (
+		out []byte
+		err error
+	)
 	switch e.cfg.mode {
 	case RenderModeChromium:
-		return e.renderChromium(ctx, html)
+		out, err = e.renderChromium(ctx, html)
 	case RenderModeLight:
-		return light(ctx, html)
+		out, err = light(ctx, html)
 	default: // RenderModeAuto
-		out, err := e.renderChromium(ctx, html)
-		if err == nil {
-			return out, nil
+		out, err = e.renderChromium(ctx, html)
+		if err != nil {
+			out, err = light(ctx, html)
 		}
-		return light(ctx, html)
 	}
+	if err == nil {
+		e.cache.put(html, out)
+	}
+	return out, err
 }
 
 // renderChromium checks out a reusable tab from the pool (creating one lazily

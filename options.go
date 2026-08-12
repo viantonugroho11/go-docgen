@@ -24,6 +24,8 @@ type Config struct {
 	PDFMaxConcurrency int
 	PDFChromePath     string
 	PDFExtraFlags     []string
+	PDFCacheSize      int
+	PDFPrewarm        bool
 }
 
 type Option func(*Config)
@@ -85,6 +87,27 @@ func WithPDFChromePath(path string) Option {
 func WithPDFExtraFlags(flags ...string) Option {
 	return func(cfg *Config) {
 		cfg.PDFExtraFlags = append(cfg.PDFExtraFlags, flags...)
+	}
+}
+
+// WithPDFCacheSize enables an in-memory LRU cache of rendered PDFs keyed by
+// sha256(html). A hit returns instantly, skipping the browser round-trip and
+// PrintToPDF entirely — effective latency for repeated inputs drops to ~0 ms.
+// Zero (default) disables the cache. Recommended: 64-512 for invoice/statement
+// workloads with high content repetition.
+func WithPDFCacheSize(n int) Option {
+	return func(cfg *Config) {
+		cfg.PDFCacheSize = n
+	}
+}
+
+// WithPDFPrewarm launches Chromium and materialises every pooled tab in a
+// background goroutine at Generator construction time, so the first PDF()
+// call does not pay the ~200-500 ms cold-start cost. Has no effect when
+// PDFRenderMode is PDFRenderLight.
+func WithPDFPrewarm(enable bool) Option {
+	return func(cfg *Config) {
+		cfg.PDFPrewarm = enable
 	}
 }
 

@@ -1,7 +1,9 @@
 package pdf
 
 import (
+	"bytes"
 	"context"
+	"os/exec"
 	"strings"
 	"testing"
 	"time"
@@ -69,10 +71,89 @@ func BenchmarkRender_Chromium(b *testing.B) {
 	})
 	ctx := context.Background()
 
+	// Warm the browser + one tab so we measure steady-state, not cold start.
+	if _, err := e.Render(ctx, html); err != nil {
+		b.Fatal(err)
+	}
+
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
 		if _, err := e.Render(ctx, html); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkRender_Chromium_Medium exercises the reused-tab pool with a bigger payload.
+func BenchmarkRender_Chromium_Medium(b *testing.B) {
+	if testing.Short() {
+		b.Skip("omit chromedp in -short")
+	}
+	html := benchHTMLMedium()
+	e := New(EngineConfig{Mode: RenderModeChromium, Timeout: 3 * time.Minute})
+	ctx := context.Background()
+
+	// Warm the browser + one tab so the loop measures steady-state per-render cost.
+	if _, err := e.Render(ctx, html); err != nil {
+		b.Fatal(err)
+	}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := e.Render(ctx, html); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+// BenchmarkRender_Wkhtmltopdf is the reference implementation to beat: shells
+// out to `wkhtmltopdf - -` per render. Skipped when the binary is absent.
+func BenchmarkRender_Wkhtmltopdf(b *testing.B) {
+	if testing.Short() {
+		b.Skip("omit external binaries in -short")
+	}
+	bin, err := exec.LookPath("wkhtmltopdf")
+	if err != nil {
+		b.Skip("wkhtmltopdf not installed")
+	}
+	html := benchHTMLSmall()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		cmd := exec.Command(bin, "--quiet", "-", "-")
+		cmd.Stdin = strings.NewReader(html)
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		if err := cmd.Run(); err != nil {
+			b.Fatal(err)
+		}
+		if out.Len() == 0 {
+			b.Fatal("empty pdf")
+		}
+	}
+}
+
+func BenchmarkRender_Wkhtmltopdf_Medium(b *testing.B) {
+	if testing.Short() {
+		b.Skip("omit external binaries in -short")
+	}
+	bin, err := exec.LookPath("wkhtmltopdf")
+	if err != nil {
+		b.Skip("wkhtmltopdf not installed")
+	}
+	html := benchHTMLMedium()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		cmd := exec.Command(bin, "--quiet", "-", "-")
+		cmd.Stdin = strings.NewReader(html)
+		var out bytes.Buffer
+		cmd.Stdout = &out
+		if err := cmd.Run(); err != nil {
 			b.Fatal(err)
 		}
 	}

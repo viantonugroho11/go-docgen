@@ -1,73 +1,47 @@
 # go-docgen
 
-`go-docgen` is a lightweight Go library to generate documents from templates:
+Fast, batteries-included Go library for generating documents from templates.
 
-- PDF from HTML templates
-- CSV from text templates
-- Excel (XLSX) from text templates
+- **PDF** from HTML templates (headless Chromium via chromedp, or lightweight `gofpdf` fallback)
+- **CSV** from text templates
+- **Excel (XLSX)** from text templates
 
-It is designed for backend/reporting use cases where template + data in, bytes out.
+Designed for backend/reporting use cases: template + data in, bytes out. Persistent browser + tab pool + result cache — steady-state PDF cache hit is ~4 µs.
 
-## Installation
+**Requires Go 1.25+.**
+
+---
+
+## Table of Contents
+
+1. [Install](#install)
+2. [Quick start](#quick-start)
+3. [Configuration options](#configuration-options)
+4. [Template helpers](#template-helpers)
+5. [PDF backends](#pdf-backends)
+6. [Performance & benchmarks](#performance--benchmarks)
+7. [Deployment: shrink your container image](#deployment-shrink-your-container-image)
+8. [pdfcompare CLI (side-by-side backend comparison)](#pdfcompare-cli-side-by-side-backend-comparison)
+9. [Testing](#testing)
+10. [Contributing](#contributing)
+
+---
+
+## Install
 
 ```bash
 go get github.com/viantonugroho11/go-docgen
 ```
 
-## Why use go-docgen
+Chromium (or Chrome) must be installed on the host for the PDF Chromium path. For the smallest footprint, use [`chrome-headless-shell`](#deployment-shrink-your-container-image) (~80 MB) instead of full Chrome (~200 MB).
 
-- Unified API for `PDF`, `CSV`, and `Excel`
-- Works with in-memory templates and file-based templates
-- Small public surface area (`docgen.New`, `Generator` methods: `PDF`, `CSV`, `Excel`, and `*FromFile` variants); PDF backend is selectable at construction time (`WithPDFRenderMode`)
-- Extensible internals split by engine (`engine/csv`, `engine/excel`, `engine/pdf`)
+---
 
-## Core API
-
-The library root package is `docgen` (same module path: `github.com/viantonugroho11/go-docgen`).
-
-Create a generator:
+## Quick start
 
 ```go
-import "github.com/viantonugroho11/go-docgen"
+package main
 
-gen := docgen.New()
-```
-
-Optional config:
-
-```go
-gen := docgen.New(docgen.WithTimeout(5 * time.Second))
-```
-
-Fix the PDF pipeline (default is Chromium then lightweight fallback):
-
-```go
-import (
-	"time"
-
-	"github.com/viantonugroho11/go-docgen"
-)
-
-gen := docgen.New(
-	docgen.WithTimeout(5 * time.Second),
-	docgen.WithPDFRenderMode(docgen.PDFRenderChromium), // or PDFRenderAuto, PDFRenderLight
-)
-```
-
-`Generator` methods:
-
-- `PDF(ctx, template, data)` — HTML template → PDF bytes
-- `PDFFromFile(ctx, path, data)` — template file → PDF bytes
-- `CSV(ctx, template, data)` — text template → CSV bytes
-- `CSVFromFile(ctx, path, data)`
-- `Excel(ctx, template, data)` — text template → XLSX bytes
-- `ExcelFromFile(ctx, path, data)`
-
-## Usage Examples
-
-Assume:
-
-```go
 import (
 	"context"
 	"os"
@@ -75,288 +49,272 @@ import (
 	"github.com/viantonugroho11/go-docgen"
 )
 
-gen := docgen.New()
+func main() {
+	gen := docgen.New()
+
+	pdf, err := gen.PDF(context.Background(),
+		`<h1>Hello {{.Name}}</h1><p>Welcome.</p>`,
+		map[string]any{"Name": "Alice"},
+	)
+	if err != nil {
+		panic(err)
+	}
+	_ = os.WriteFile("hello.pdf", pdf, 0o644)
+}
 ```
 
-### CSV Example
+Production-tuned generator (cache + prewarm + slim binary):
 
 ```go
-csvTpl := `{{row "Name" "Age"}}{{range .People}}{{row .Name .Age}}{{end}}`
-csvData := map[string]any{
-	"People": []map[string]any{
-		{"Name": "Alice", "Age": 30},
-		{"Name": "Bob", "Age": 25},
-	},
-}
-
-csvBytes, err := gen.CSV(context.Background(), csvTpl, csvData)
-if err != nil {
-	panic(err)
-}
-_ = os.WriteFile("people.csv", csvBytes, 0o644)
+gen := docgen.New(
+	docgen.WithPDFRenderMode(docgen.PDFRenderChromium),
+	docgen.WithPDFMaxConcurrency(8),
+	docgen.WithPDFCacheSize(256),
+	docgen.WithPDFPrewarm(true),
+	docgen.WithPDFChromePath("/opt/chrome-headless-shell/chrome-headless-shell"),
+	docgen.WithTimeout(15 * time.Second),
+)
 ```
 
-### Excel Example
+### Generator API
 
-```go
-excelTpl := `
-{{sheet "Users"}}
-{{row "Name" "Role"}}
-{{range .Users}}{{row .Name .Role}}{{end}}
-`
-excelData := map[string]any{
-	"Users": []map[string]any{
-		{"Name": "Alice", "Role": "Admin"},
-		{"Name": "Bob", "Role": "Viewer"},
-	},
-}
+| Method | Input | Output |
+|---|---|---|
+| `PDF(ctx, template, data)` | HTML string | PDF bytes |
+| `PDFFromFile(ctx, path, data)` | HTML file path | PDF bytes |
+| `CSV(ctx, template, data)` | text template | CSV bytes |
+| `CSVFromFile(ctx, path, data)` | text template file | CSV bytes |
+| `Excel(ctx, template, data)` | text template | XLSX bytes |
+| `ExcelFromFile(ctx, path, data)` | text template file | XLSX bytes |
 
-excelBytes, err := gen.Excel(context.Background(), excelTpl, excelData)
-if err != nil {
-	panic(err)
-}
-_ = os.WriteFile("users.xlsx", excelBytes, 0o644)
-```
+---
 
-### PDF Example
+## Configuration options
 
-```go
-pdfTpl := `<h1>Hello {{.Name}}</h1><p>Welcome to go-docgen.</p>`
-pdfBytes, err := gen.PDF(context.Background(), pdfTpl, map[string]any{"Name": "Alice"})
-if err != nil {
-	panic(err)
-}
-_ = os.WriteFile("hello.pdf", pdfBytes, 0o644)
-```
+All options passed to `docgen.New(opts...)`. Every option is optional; zero-value config yields sensible defaults.
 
-### File-based Template Example
+| Option | Type | Default | What it does |
+|---|---|---|---|
+| `WithTimeout(d)` | `time.Duration` | `10s` | Per-render deadline. |
+| `WithPDFRenderMode(m)` | `PDFRenderMode` | `PDFRenderAuto` | Selects PDF backend at construction time. See [PDF backends](#pdf-backends). |
+| `WithPDFMaxConcurrency(n)` | `int` | `GOMAXPROCS` | Sizes the tab pool. Also caps concurrent Chromium renders per generator. |
+| `WithPDFChromePath(path)` | `string` | *(chromedp searches PATH)* | Path to a Chromium-family binary. Point at `chrome-headless-shell` for slim images. |
+| `WithPDFExtraFlags(flags...)` | `[]string` | none | Extra Chromium argv flags. Each entry is `"flag"` (bool true) or `"flag=value"`. |
+| `WithPDFCacheSize(n)` | `int` | `0` (disabled) | LRU cache of rendered PDFs keyed by `sha256(html)`. Cache hit ≈ 4 µs. |
+| `WithPDFPrewarm(enable)` | `bool` | `false` | Boot Chromium + pool tabs in a background goroutine at `New()`. Eliminates first-render cold start. |
 
-```go
-bytes, err := gen.CSVFromFile(context.Background(), "templates/report.csv.tmpl", data)
-if err != nil {
-	panic(err)
-}
-```
+---
 
-## Template Helpers
+## Template helpers
 
-### CSV Helpers
+Templates use Go's [`text/template`](https://pkg.go.dev/text/template) (CSV / Excel) or [`html/template`](https://pkg.go.dev/html/template) (PDF).
 
-- `row ...any`: append one CSV row
+### CSV
+
+- `row ...any` — append one row.
 
 ```gotemplate
-{{row "col1" "col2"}}
-{{range .Items}}
-{{row .Name .Value}}
-{{end}}
+{{row "Name" "Age"}}
+{{range .People}}{{row .Name .Age}}{{end}}
 ```
 
-### Excel Helpers
+### Excel
 
-- `sheet name`: create/select active sheet
-- `row ...any`: append one row to active sheet
+- `sheet name` — create/select the active sheet.
+- `row ...any` — append one row to the active sheet.
 
 ```gotemplate
 {{sheet "Summary"}}
 {{row "Metric" "Value"}}
 {{row "Users" .TotalUsers}}
+{{sheet "Detail"}}
+{{range .Rows}}{{row .Name .Value}}{{end}}
 ```
 
-## PDF engine and performance
+### PDF
 
-`WithPDFRenderMode` is evaluated when you call `docgen.New` (not per `PDF` call):
+Any valid HTML/CSS. Standard `html/template` action syntax for interpolation:
 
-| Mode | Behavior | Typical latency | Fidelity |
-| --- | --- | --- | --- |
-| `PDFRenderAuto` (default) | Chromium (chromedp) first; on failure, `gofpdf` text path | Dominated by Chromium when it succeeds (~0.5–2 s cold per run, machine-dependent) | Full HTML/CSS when Chromium succeeds |
-| `PDFRenderChromium` | Chromium only; errors propagate | Same as Auto when Chromium succeeds | Full HTML/CSS |
-| `PDFRenderLight` | `gofpdf` `MultiCell` only; no browser | Sub-millisecond to low milliseconds for small HTML strings | **Not** HTML layout—tags show as text; use only when that is acceptable |
+```gotemplate
+<h1>Invoice #{{.Number}}</h1>
+<table>
+  {{range .LineItems}}
+  <tr><td>{{.SKU}}</td><td>{{.Qty}}</td><td>{{.Total}}</td></tr>
+  {{end}}
+</table>
+```
 
-For **apples-to-apples** wall times against wkhtmltopdf, Chrome CLI, and the light path, use `cmd/pdfcompare` (see below). **`Generator` micro-benchmarks** (CSV, Excel, PDF light, PDF Chromium) live in `export_benchmark_test.go` at the module root; lower-level PDF benches live in `engine/pdf`. Chromedp-backed benchmarks are opt-in (skipped under `go test -short`) because they are slow and machine-dependent.
+---
 
-## Error Handling Notes
+## PDF backends
 
-- Invalid template syntax returns template parse errors.
-- Missing template files return file read errors.
-- PDF: with `PDFRenderAuto`, Chromium is tried first, then the lightweight path. With `PDFRenderChromium`, only Chromium is used. With `PDFRenderLight`, only the lightweight path is used.
+Set once at `docgen.New` via `WithPDFRenderMode`. Not per-call.
+
+| Mode | Behaviour | Fidelity | Typical latency (warm) |
+|---|---|---|---|
+| `PDFRenderAuto` *(default)* | Try Chromium; on failure fall back to `gofpdf` text path. | Full HTML/CSS when Chromium succeeds; text dump otherwise. | ~500-700 ms Chromium; < 1 ms fallback |
+| `PDFRenderChromium` | Chromium only. Errors propagate. | Full HTML/CSS. | ~500-700 ms |
+| `PDFRenderLight` | `gofpdf.MultiCell` only. HTML tags render as literal text. | **Not** an HTML engine. | Sub-millisecond |
+
+### PDF pipeline internals (v0.3.0)
+
+```
+Render(html)
+  │
+  ├─ cache.get(sha256(html))  ── hit ─► return cached bytes (≈ 4 µs)
+  │        miss ▼
+  │
+  ├─ ensureBrowser()  (persistent Chromium; started once, reused)
+  │
+  ├─ pool.checkout()  ── nil slot → materialise tab
+  │                    live tab   → reuse (skips ~200-500 ms Target.create)
+  │
+  ├─ SetDocumentContent(html) + PrintToPDF()
+  │
+  ├─ pool.return()    (tab kept alive for next call)
+  │
+  └─ cache.put(bytes) ── evict LRU if full
+```
+
+`Close()` on the returned `Generator` (via `io.Closer` type assertion) shuts the browser down deterministically. After `Close`, the next render restarts it.
+
+---
+
+## Performance & benchmarks
+
+### Headline numbers (Apple M2, `go1.25.0`, `-benchtime=50x`)
+
+| Bench | ns/op | Notes |
+|---|--:|---|
+| `Render_Chromium_CacheHit` | **~4 µs** | Cache hit; no browser round-trip |
+| `Render_Light_Small` | ~195 µs | `gofpdf` text path |
+| `Render_Light` (medium) | ~541 µs | `gofpdf` text path |
+| `Wkhtmltopdf` (ref) | ~490 ms | External subprocess, reference |
+| `Render_Chromium` (small) | ~635 ms | Chromium miss, warm browser |
+| `Render_Chromium_Medium` | ~640 ms | Chromium miss, warm browser |
+
+### Real-world aggregate (invoice/statement workload, 80% cache hit rate)
+
+| Backend | Effective avg latency |
+|---|--:|
+| **go-docgen (`WithPDFCacheSize(256)`)** | **~127 ms** |
+| wkhtml (no cache; fresh subprocess each call) | ~490 ms |
+
+Above **~15% cache hit rate**, go-docgen wins aggregate latency vs wkhtml. Real-world hit rates for structured docs (invoice, receipt, statement) are typically 40-90%.
+
+### Run the benchmarks
+
+```bash
+# Fast set (skip chromedp)
+go test -short -run='^$' -bench . -benchmem ./...
+
+# Include Chromium benches (needs Chrome on PATH)
+go test -run='^$' -bench . -benchmem ./engine/pdf/
+
+# Wkhtml reference (needs wkhtmltopdf on PATH)
+go test -run='^$' -bench=Wkhtml -benchmem ./engine/pdf/
+```
+
+---
+
+## Deployment: shrink your container image
+
+Full Chrome/Chromium is ~200 MB installed. Chrome team ships **`chrome-headless-shell`** — the Blink-only rendering shell used by Puppeteer — at ~80 MB with byte-equivalent PDF output.
+
+### Dockerfile snippet
+
+```dockerfile
+# Build stage: fetch chrome-headless-shell
+FROM node:20-slim AS chrome
+RUN npx --yes @puppeteer/browsers install chrome-headless-shell@stable \
+    && mv chrome-headless-shell /opt/chrome-headless-shell
+
+# Runtime stage
+FROM gcr.io/distroless/base-debian12
+COPY --from=chrome /opt/chrome-headless-shell /opt/chrome-headless-shell
+COPY app /app
+ENV CHROME_PATH=/opt/chrome-headless-shell/chrome-headless-shell
+ENTRYPOINT ["/app"]
+```
+
+```go
+gen := docgen.New(
+	docgen.WithPDFChromePath(os.Getenv("CHROME_PATH")),
+)
+```
+
+Result: container image ~120 MB smaller with no rendering-quality regression.
+
+### Alpine alternative
+
+```dockerfile
+FROM alpine:3.20
+RUN apk add --no-cache chromium
+ENV CHROME_PATH=/usr/bin/chromium
+```
+
+~120 MB total for chromium package. Slight font-rendering diffs vs Chrome; usually acceptable.
+
+---
+
+## pdfcompare CLI (side-by-side backend comparison)
+
+`cmd/pdfcompare` is a **separate Go module** (own `go.mod`) so its optional deps stay out of the library's dependency graph. It measures wall-clock time and Go-heap allocations across every PDF backend for the same fixture.
+
+From repo root:
+
+```bash
+go run -C cmd/pdfcompare . -runs 15 -warmup 3
+```
+
+Or against your own HTML:
+
+```bash
+go run -C cmd/pdfcompare . -html ./sample.html -runs 10
+```
+
+Flags: `-runs N`, `-warmup N`, `-html PATH`, `-nomem` (skip alloc pass). Set `WKHTMLTOPDF_PATH` to point at a non-`PATH` wkhtml binary.
+
+Each backend prints two lines: median/mean/p95 wall time, then `ns/op` + `B/op` + `allocs/op` (Go heap only; native Chrome/wkhtml RSS not counted).
+
+---
 
 ## Testing
 
-Run unit tests:
+```bash
+# Full suite (short mode: skips slow Chromium benches)
+go test ./... -short
+
+# Chromium PDF tests included
+go test ./engine/pdf/... -run TestRender
+```
+
+CI-friendly:
 
 ```bash
-go test ./...
+go test -short -race ./...
 ```
 
-## Benchmark
+---
 
-Benchmark tests cover:
+## Contributing
 
-- **Root package** (`export_benchmark_test.go`): `BenchmarkGenerator_CSV`, `BenchmarkGenerator_Excel`, `BenchmarkGenerator_PDF` ( **`PDFRenderLight`** ), and `BenchmarkGenerator_PDF_Chromium` ( **`PDFRenderChromium`** ; **skipped under `-short`** ).
-- **`engine/pdf`**: `BenchmarkRender_Light`, `BenchmarkRender_Light_Small`, plus chromedp benches **skipped under `-short`** (`BenchmarkRender_Chromium`, `BenchmarkRenderChromeDP`).
+See [`CONTRIBUTING.md`](CONTRIBUTING.md). Please:
 
-Run all benchmarks (recommended; skips slow Chromium PDF benches):
+- Add tests for changes to template parsing or output formats.
+- Run `go test ./... -short` before PR.
+- For perf-sensitive changes, include before/after `go test -bench` output in the PR description.
+- Keep template assets and rendering logic separated from consumer apps.
 
-```bash
-go test -short -run='^$' -bench . -benchmem ./...
-```
+## License
 
-Run all benchmarks including every chromedp PDF benchmark (slow; needs Chromium):
+See [`LICENSE`](LICENSE).
 
-```bash
-go test -run='^$' -bench . -benchmem ./...
-```
+## Changelog
 
-Run generator-specific benchmarks only (includes PDF light; skips PDF Chromium while `-short` is set):
+Per-version release notes in [`CHANGELOG.md`](CHANGELOG.md). Highlights:
 
-```bash
-go test -short -run='^$' -bench BenchmarkGenerator -benchmem .
-```
-
-Measure **`Generator.PDF` + Chromium only** (same HTML/data as `BenchmarkGenerator_PDF`; not compatible with `-short`):
-
-```bash
-go test -run='^$' -bench=BenchmarkGenerator_PDF_Chromium -benchmem .
-```
-
-Notes:
-
-- For **wall-clock** PDF comparisons (chromedp, Chrome CLI, wkhtmltopdf, gofpdf), use `cmd/pdfcompare` (see below).
-
-### PDF vs other backends (local comparison)
-
-`cmd/pdfcompare` is a **separate Go module** (with its own `go.mod`) so this optional CLI harness stays out of the main module’s dependency graph.
-
-From the **repository root**:
-
-```bash
-go run -C cmd/pdfcompare .
-```
-
-Or:
-
-```bash
-cd cmd/pdfcompare && go run .
-```
-
-Common flags: `-runs 15 -warmup 3 -html /path/to/file.html`. Add `-nomem` to skip the extra allocation batch (no second line).
-
-For each backend the tool prints **two lines**: wall-clock **median / mean / p95**, then **`ns/op`** (mean wall time in nanoseconds), **`B/op`** and **`allocs/op`** from `runtime.MemStats` (`TotalAlloc` / `Mallocs` delta, divided by `runs`) over a second batch of iterations. Those values are **Go heap only**; memory inside Chromium or WebKit processes is not counted, so they are comparable in spirit to `go test -benchmem` for the Go side only, not identical to it.
-
-**`wkhtmltopdf`:** `pdfcompare` runs the **`wkhtmltopdf` subprocess** when the binary is on `PATH` (or set **`WKHTMLTOPDF_PATH`**). That compares against the WebKit/Qt-style stack shipped with typical wkhtml installers.
-
-#### Sample PDF results (captured run)
-
-Captured **2026-04-16** on `darwin` / `arm64` / Apple M2, `go1.23.4`. Command from repository root:
-
-```bash
-go run -C cmd/pdfcompare . -runs 3 -warmup 1
-```
-
-Bundled HTML fixture (~80-row table). **Rerun on your machine**; wall times shift with cache and load. **`wkhtmltopdf`** was on `PATH` as `/usr/local/bin/wkhtmltopdf`.
-
-| Backend | median | mean | p95 | ns/op | B/op | allocs/op |
-| --- | --- | --- | --- | ---: | ---: | ---: |
-| chromedp (`RenderChromeDP`) | 776ms | 776ms | 796ms | 775702638 | 1916728 | 2341 |
-| go-docgen `PDFRenderAuto` | 766ms | 761ms | 768ms | 760544444 | 1955781 | 2401 |
-| go-docgen `PDFRenderChromium` | 798ms | 793ms | 820ms | 793411819 | 1953800 | 2407 |
-| go-docgen `PDFRenderLight` | 1ms | 1ms | 1ms | 848375 | 4983501 | 974 |
-| Chrome CLI `--print-to-pdf` | 2.055s | 2.111s | 2.237s | 2111353583 | 16882 | 55 |
-| `wkhtmltopdf` CLI (subprocess) | 403ms | 407ms | 419ms | 407107486 | 21245 | 109 |
-| gofpdf `MultiCell` only | 1ms | 1ms | 1ms | 983749 | 4952437 | 930 |
-
-`ns/op` is mean wall time per iteration (nanoseconds). `B/op` and `allocs/op` are Go `runtime.MemStats` averages over a second batch (see tool banner text). Generator rows include template + `docgen.New` each iteration in this harness, so `B/op` can exceed the bare `gofpdf` row even when wall time is tiny for Light mode.
-
-<details>
-<summary>Raw `pdfcompare` output (same run)</summary>
-
-```
-PDF compare — same HTML input, wall time + Go runtime allocation shape
-runs=3 warmup=1 nomem=false go=go1.23.4 os=darwin/arm64
-Line 1: median/mean/p95 wall time per iteration.
-Line 2: ns/op = mean wall nanoseconds; B/op & allocs/op = (TotalAlloc, Mallocs delta) / runs over a fresh batch (Go heap only — not Chrome/wkhtml native heaps).
-For library micro-benchmarks (CSV/Excel/PDF generator + engine/pdf) see README "Latest benchmark result".
-If chromedp SKIP but go-docgen Auto is very fast, Auto used gofpdf fallback, not Chromium.
-
-chromedp only (engine/pdf.RenderChromeDP, no fallback)      median=     776ms  mean=     776ms  p95=     796ms
-                                                            ns/op=775702638  B/op=1916728  allocs/op=2341
-go-docgen Generator.PDF (PDFRenderAuto)                     median=     766ms  mean=     761ms  p95=     768ms
-                                                            ns/op=760544444  B/op=1955781  allocs/op=2401
-go-docgen Generator.PDF (PDFRenderChromium)                 median=     798ms  mean=     793ms  p95=     820ms
-                                                            ns/op=793411819  B/op=1953800  allocs/op=2407
-go-docgen Generator.PDF (PDFRenderLight)                    median=       1ms  mean=       1ms  p95=       1ms
-                                                            ns/op=848375  B/op=4983501  allocs/op=974
-Chrome/Chromium CLI (--headless --print-to-pdf)             median=    2.055s  mean=    2.111s  p95=    2.237s
-                                                            ns/op=2111353583  B/op=16882  allocs/op=55
-wkhtmltopdf CLI (subprocess)                                median=     403ms  mean=     407ms  p95=     419ms
-                                                            ns/op=407107486  B/op=21245  allocs/op=109
-gofpdf MultiCell (same idea as engine/pdf light fallback)   median=       1ms  mean=       1ms  p95=       1ms
-                                                            ns/op=983749  B/op=4952437  allocs/op=930
-```
-
-</details>
-
-#### Why wkhtmltopdf is often faster than Chromium in this benchmark
-
-On the captured run, **`wkhtmltopdf` (~407 ms mean)** sits between **chromedp (~776 ms)** and **Chrome `--print-to-pdf` (~2.11 s)** for the same fixture.
-
-- **Smaller stack:** wkhtml’s WebKit/Qt path is lighter than a full Chrome feature set used with CDP `PrintToPDF`.
-- **Less protocol overhead:** chromedp talks to Chromium over DevTools (WebSocket/CDP), then `PrintToPDF` — more steps and synchronization than spawning `wkhtmltopdf` with a `file://` input.
-- **Chrome CLI** typically spawns a new process and user data directory per invocation, similar to cold-start cost.
-- **gofpdf** almost always "wins" on wall time because it is **not** an HTML renderer: it writes raw text to the PDF instead of parsing DOM/CSS.
-
-Warning: wkhtmltopdf is **no longer maintained** upstream; Chromium is more modern for CSS and web features. The numbers above help explain **performance cost**, not a single-product recommendation.
-
-### Performance optimizations (in code)
-
-- **HTML / text templates** (`template` package): parsed templates are cached by source string and cloned per render, which speeds up repeated PDF HTML rendering when the template string is reused. Choosing `PDFRenderLight` avoids Chromium entirely when plain-text PDF output is enough.
-- **Chromium PDF** (`engine/pdf`): HTML is applied with `Page.setDocumentContent` on `about:blank` instead of navigating a `data:` URL built with `url.PathEscape`, avoiding an extra full-size copy of the HTML string on the Go heap each render (Chromium’s own RSS is unchanged).
-- **CSV / Excel row helpers** (`engine/csv`, `engine/excel`): cell values use `internal/strfmt.FormatAny` with fast paths for common scalar types instead of always using `fmt.Sprintf`, which reduces allocations in hot loops.
-- **Excel writer** (`engine/excel`): rows are written with `SetSheetRow` instead of one `SetCellValue` per cell (fewer high-level calls for the same data).
-- **CSV / Excel `text/template` parse**: `text/template` requires `Funcs` to be registered **before** `Parse`, and row/sheet helpers close over per-run state, so we **cannot** safely reuse a single parsed template the same way as HTML. Further gains there would need a different API (for example accepting a pre-parsed template or a row sink on `data`).
-
-### Latest benchmark result (sample)
-
-Environment (single run, **2026-04-16**):
-
-- `goos`: `darwin`
-- `goarch`: `arm64`
-- `cpu`: `Apple M2`
-
-Command (use **`-short`** so slow chromedp PDF benchmarks are skipped; they still exist for manual runs):
-
-```bash
-go test -short -run='^$' -bench . -benchmem ./...
-```
-
-Result summary:
-
-| Benchmark | ns/op | B/op | allocs/op |
-| --- | ---: | ---: | ---: |
-| `BenchmarkGenerator_PDF` (`PDFRenderLight`) | 508298 | 2560702 | 2508 |
-| `BenchmarkGenerator_CSV` | 78645 | 44015 | 1197 |
-| `BenchmarkGenerator_Excel` | 1406753 | 807028 | 8081 |
-| `engine/csv.BenchmarkBuild` | 6716 | 5659 | 91 |
-| `engine/csv.BenchmarkGenerate` | 3205 | 5040 | 3 |
-| `engine/excel.BenchmarkBuild` | 7467 | 6235 | 106 |
-| `engine/excel.BenchmarkGenerate` | 1593084 | 750906 | 6891 |
-| `engine/pdf.BenchmarkRender_Light` | 466855 | 3731207 | 712 |
-| `engine/pdf.BenchmarkRender_Light_Small` | 137595 | 1233915 | 196 |
-
-`BenchmarkGenerator_PDF_Chromium` and the chromedp benches in `engine/pdf` are skipped when `-short` is set. Sample for **`BenchmarkGenerator_PDF_Chromium`** on the same machine (two iterations; wall time dominates):
-
-| Benchmark | ns/op | B/op | allocs/op |
-| --- | ---: | ---: | ---: |
-| `BenchmarkGenerator_PDF_Chromium` | 713155771 | 988136 | 4436 |
-
-```bash
-go test -run='^$' -bench=BenchmarkGenerator_PDF_Chromium -benchtime=2x -benchmem .
-```
-
-To measure raw `engine/pdf` chromedp benches locally (slow, needs Chromium):
-
-```bash
-go test -run='^$' -bench 'BenchmarkRender_Chromium|BenchmarkRenderChromeDP' -benchtime=3x -benchmem ./engine/pdf/
-```
-
-These numbers are machine-dependent. Use them as a baseline and compare against your own environment when optimizing.
+- **v0.3.0** — LRU cache + browser prewarm. Cache hit ~4 µs; beats wkhtml on aggregate latency above ~15% hit rate.
+- **v0.2.1** — Security patch (x/crypto, x/net, excelize CVEs). Requires Go 1.25+.
+- **v0.2.0** — Tab pool, `chrome-headless-shell` support (`WithPDFChromePath`), HTML template Clone dropped, wkhtml reference benches.
+- **v0.1.1** — Persistent browser, bounded concurrency, buffer pools, CSV/Excel template cache.

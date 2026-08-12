@@ -4,6 +4,20 @@ All notable changes to go-docgen are documented here.
 
 ---
 
+## [0.2.1] — 2026-08-12 — Security patch
+
+Fixes 44 open Dependabot alerts across root and `cmd/pdfcompare` modules.
+
+| Package | From | To | CVEs |
+|---|--:|--:|---|
+| `golang.org/x/crypto` | v0.19.0 | **v0.55.0** | CVE-2024-45337, CVE-2025-22869, CVE-2025-47914, CVE-2025-58181, CVE-2026-39827..39835, CVE-2026-42508, CVE-2026-46595, CVE-2026-46597, CVE-2026-46598 |
+| `golang.org/x/net` | v0.21.0 | **v0.57.0** | CVE-2023-45288, CVE-2025-22870, CVE-2025-22872, CVE-2026-25680 |
+| `github.com/xuri/excelize/v2` | v2.8.1 | **v2.11.0** | CVE-2026-54063 (`checkSheet` OOM/panic on crafted `<row r="N">`) |
+
+**Breaking**: `go` directive bumped `1.22 -> 1.25` (required by newer `x/crypto`). Consumers must be on Go 1.25+.
+
+---
+
 ## [0.2.0] — 2026-08-12 — Performance, Slim Chromium, Tab Pool
 
 ### Summary

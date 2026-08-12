@@ -19,9 +19,11 @@ const (
 )
 
 type Config struct {
-	Timeout            time.Duration
-	PDFRenderMode      PDFRenderMode
-	PDFMaxConcurrency  int
+	Timeout           time.Duration
+	PDFRenderMode     PDFRenderMode
+	PDFMaxConcurrency int
+	PDFChromePath     string
+	PDFExtraFlags     []string
 }
 
 type Option func(*Config)
@@ -46,6 +48,43 @@ func WithPDFRenderMode(mode PDFRenderMode) Option {
 func WithPDFMaxConcurrency(n int) Option {
 	return func(cfg *Config) {
 		cfg.PDFMaxConcurrency = n
+	}
+}
+
+// WithPDFChromePath overrides the Chromium executable used by the PDF engine.
+//
+// The default (empty string) makes chromedp search PATH for the standard
+// Chrome / Chromium binaries (~200 MB installed). Point this at a
+// chrome-headless-shell binary (~80 MB) to shrink container images:
+//
+//	// Install once (per image build):
+//	//   npx @puppeteer/browsers install chrome-headless-shell@stable
+//	// Then:
+//	gen := docgen.New(
+//	    docgen.WithPDFRenderMode(docgen.PDFRenderChromium),
+//	    docgen.WithPDFChromePath("/opt/chrome-headless-shell/chrome-headless-shell"),
+//	)
+//
+// chrome-headless-shell is the Chrome team's Blink-based rendering shell; PDF
+// output is byte-equivalent to full Chrome's --print-to-pdf. Has no effect
+// when PDFRenderMode is PDFRenderLight.
+func WithPDFChromePath(path string) Option {
+	return func(cfg *Config) {
+		cfg.PDFChromePath = path
+	}
+}
+
+// WithPDFExtraFlags appends extra Chromium command-line flags. Each entry is
+// either "flag" (bool true) or "flag=value". Applied after chromedp defaults.
+// Has no effect when PDFRenderMode is PDFRenderLight.
+//
+//	docgen.WithPDFExtraFlags(
+//	    "font-render-hinting=none",
+//	    "hide-scrollbars",
+//	)
+func WithPDFExtraFlags(flags ...string) Option {
+	return func(cfg *Config) {
+		cfg.PDFExtraFlags = append(cfg.PDFExtraFlags, flags...)
 	}
 }
 

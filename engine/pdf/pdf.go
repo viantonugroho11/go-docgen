@@ -3,6 +3,7 @@ package pdf
 import (
 	"context"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -18,12 +19,23 @@ type EngineConfig struct {
 	// reusable tab pool. Defaults to runtime.GOMAXPROCS(0). Has no effect
 	// for RenderModeLight.
 	MaxConcurrency int
+	// ChromePath is the absolute path to a Chromium-family executable. When
+	// empty, chromedp searches PATH for the standard Chrome/Chromium binaries.
+	// Set this to point at chrome-headless-shell (~80 MB, vs ~200 MB for full
+	// Chrome) for slim container images. Has no effect for RenderModeLight.
+	ChromePath string
+	// ExtraFlags are appended to the Chromium argv after the chromedp defaults.
+	// Use for site-specific tuning (e.g. --font-render-hinting=none for
+	// deterministic screenshots). Has no effect for RenderModeLight.
+	ExtraFlags []string
 }
 
 type config struct {
 	timeout        time.Duration
 	mode           RenderMode
 	maxConcurrency int
+	chromePath     string
+	extraFlags     []string
 }
 
 // tabHandle is a persistent Chromium tab (target). The pool holds either a
@@ -67,6 +79,8 @@ func New(cfg EngineConfig) Engine {
 			timeout:        timeout,
 			mode:           mode,
 			maxConcurrency: maxConc,
+			chromePath:     cfg.ChromePath,
+			extraFlags:     append([]string(nil), cfg.ExtraFlags...),
 		},
 	}
 	if mode != RenderModeLight {
@@ -119,9 +133,21 @@ func (e *engine) ensureBrowser() error {
 
 	e.closeLocked()
 
+	opts := append([]chromedp.ExecAllocatorOption(nil), chromedp.DefaultExecAllocatorOptions[:]...)
+	if e.cfg.chromePath != "" {
+		opts = append(opts, chromedp.ExecPath(e.cfg.chromePath))
+	}
+	for _, f := range e.cfg.extraFlags {
+		name, value, hasValue := strings.Cut(f, "=")
+		if hasValue {
+			opts = append(opts, chromedp.Flag(name, value))
+		} else {
+			opts = append(opts, chromedp.Flag(name, true))
+		}
+	}
 	allocCtx, allocCancel := chromedp.NewExecAllocator(
 		context.Background(),
-		chromedp.DefaultExecAllocatorOptions[:]...,
+		opts...,
 	)
 	browserCtx, browserCancel := chromedp.NewContext(allocCtx)
 

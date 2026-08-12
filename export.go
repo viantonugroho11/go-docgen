@@ -47,6 +47,8 @@ func New(opts ...Option) Generator {
 			Timeout:        cfg.Timeout,
 			Mode:           pdf.RenderMode(cfg.PDFRenderMode),
 			MaxConcurrency: cfg.PDFMaxConcurrency,
+			ChromePath:     cfg.PDFChromePath,
+			ExtraFlags:     cfg.PDFExtraFlags,
 		}),
 		csvEngine:   csv.New(),
 		excelEngine: excel.New(),

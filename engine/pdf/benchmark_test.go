@@ -108,6 +108,35 @@ func BenchmarkRender_Chromium_Medium(b *testing.B) {
 	}
 }
 
+// BenchmarkRender_Chromium_CacheHit measures steady-state latency when the
+// LRU cache holds the requested HTML. This is the effective p50 for
+// invoice/statement workloads with high content repetition. Compare against
+// BenchmarkRender_Wkhtmltopdf to see where the cache wins on aggregate
+// latency even though a single miss is slower.
+func BenchmarkRender_Chromium_CacheHit(b *testing.B) {
+	if testing.Short() {
+		b.Skip("omit chromedp in -short")
+	}
+	html := benchHTMLSmall()
+	e := New(EngineConfig{
+		Mode:      RenderModeChromium,
+		Timeout:   3 * time.Minute,
+		CacheSize: 8,
+	})
+	ctx := context.Background()
+	// Warm both browser AND cache with one render.
+	if _, err := e.Render(ctx, html); err != nil {
+		b.Fatal(err)
+	}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		if _, err := e.Render(ctx, html); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
 // BenchmarkRender_Wkhtmltopdf is the reference implementation to beat: shells
 // out to `wkhtmltopdf - -` per render. Skipped when the binary is absent.
 func BenchmarkRender_Wkhtmltopdf(b *testing.B) {

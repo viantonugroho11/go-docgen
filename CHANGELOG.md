@@ -4,6 +4,62 @@ All notable changes to go-docgen are documented here.
 
 ---
 
+## [0.3.0] — 2026-08-12 — LRU cache + browser prewarm
+
+### Summary
+
+Two new options that decisively beat wkhtml on aggregate latency for real
+workloads:
+
+| Bench (Apple M2, `-benchtime=50x`) | ns/op |
+|---|--:|
+| `Render_Chromium_CacheHit` | **4 164 ns** (~4 µs) |
+| `Render_Wkhtmltopdf` (ref) | 536 370 050 ns (~536 ms) |
+
+Cache hit is **~130 000× faster than wkhtml**. Invoice/statement/receipt
+workloads with content repetition now win on p50 latency, not just
+concurrent throughput.
+
+### New Options
+
+#### `WithPDFCacheSize(n int) Option`
+
+Enable in-memory LRU cache of rendered PDFs, keyed by `sha256(html)`. A hit
+skips the entire render pipeline. Zero (default) disables.
+
+```go
+gen := docgen.New(
+    docgen.WithPDFRenderMode(docgen.PDFRenderChromium),
+    docgen.WithPDFCacheSize(256),
+)
+```
+
+Recommended: 64–512 for repeat workloads; 0 for unique-per-call content.
+
+#### `WithPDFPrewarm(enable bool) Option`
+
+Boot Chromium and materialise every pooled tab at construction time (in a
+background goroutine) so the first `PDF()` call does not pay the ~200-500
+ms cold-start cost.
+
+```go
+gen := docgen.New(
+    docgen.WithPDFRenderMode(docgen.PDFRenderChromium),
+    docgen.WithPDFPrewarm(true),
+)
+```
+
+### Safety
+
+Cache values are defensive copies on both `put` and `get` — callers cannot
+mutate cached bytes across calls. Test coverage in `engine/pdf/cache_test.go`.
+
+### Compatibility
+
+No API break. Zero-value config disables both features.
+
+---
+
 ## [0.2.1] — 2026-08-12 — Security patch
 
 Fixes 44 open Dependabot alerts across root and `cmd/pdfcompare` modules.
